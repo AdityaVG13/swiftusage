@@ -86,6 +86,17 @@ struct PricingTests {
         #expect(PriceList.bundled.price(for: "claude-opus-5-5[1m]") == PriceList.bundled.price(for: "claude-opus-5-5"))
     }
 
+    @Test func repeatedBracketsDoNotRecurse() async {
+        let opus = ModelPrice(base: .init(input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWriteHour: 8))
+        let empty = "claude-opus-5-5" + String(repeating: "[]", count: 4000)
+        let nonEmpty = "claude-opus-5-5" + String(repeating: "[x]", count: 30)
+        let resolvedEmpty = await Task.detached { [prices] in prices.price(for: empty) }.value
+        let resolvedNonEmpty = await Task.detached { [prices] in prices.price(for: nonEmpty) }.value
+        #expect(resolvedEmpty == opus)
+        #expect(resolvedNonEmpty == opus)
+        #expect(prices.price(for: "swe-2" + String(repeating: "[x]", count: 30)) == nil)
+    }
+
     @Test func litellmListConverts() throws {
         let list: [String: Any] = [
             "claude-opus-5-5": ["litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 4e-06, "output_cost_per_token": 2e-05,

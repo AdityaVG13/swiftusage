@@ -115,15 +115,30 @@ public struct PriceList: Sendable {
     public func price(for model: String, speed: Speed = .standard) -> ModelPrice? {
         var name = model.lowercased().trimmingCharacters(in: .whitespaces)
         if let open = name.firstIndex(of: "["), let close = name[open...].firstIndex(of: "]") {
-            let prefix = name[..<open]
-            let annotation = name[name.index(after: open)..<close]
-            let suffix = name[name.index(after: close)...]
-            if !annotation.isEmpty, let priced = price(for: "\(prefix)-\(annotation)\(suffix)", speed: speed) {
+            let prefix = String(name[..<open])
+            let annotation = String(name[name.index(after: open)..<close])
+            var rest = ""
+            var remainder = name[name.index(after: close)...]
+            while let nextOpen = remainder.firstIndex(of: "[") {
+                rest += remainder[..<nextOpen]
+                guard let nextClose = remainder[nextOpen...].firstIndex(of: "]") else {
+                    remainder = ""
+                    break
+                }
+                remainder = remainder[remainder.index(after: nextClose)...]
+            }
+            rest += remainder
+            if !annotation.isEmpty, let priced = price(named: prefix + "-" + annotation + rest, speed: speed) {
                 return priced
             }
-            return price(for: "\(prefix)\(suffix)", speed: speed)
+            return price(named: prefix + rest, speed: speed)
         }
         if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
+        return price(named: name, speed: speed)
+    }
+
+    private func price(named name: String, speed: Speed) -> ModelPrice? {
+        var name = name
         var speed = speed
         if name.hasSuffix("-fast") {
             name.removeLast(5)
