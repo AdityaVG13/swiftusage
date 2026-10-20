@@ -59,8 +59,15 @@ public enum MuseTranscripts: TranscriptFormat {
         return true
     }
 
+    private static let turnCompletions: Set<String> = [
+        "turn_completed", "turn.completed", "turn-complete", "turn_complete", "turn.complete", "turn-completed",
+    ]
+
     /// The first object (breadth first, a few levels deep) with both `promptTokens` and `usage`.
     private static func usageEvent(in object: [String: Any], depth: Int = 0) -> [String: Any]? {
+        if let kind = (object["type"] as? String ?? object["kind"] as? String)?.lowercased(), turnCompletions.contains(kind) {
+            return nil
+        }
         if object["promptTokens"] != nil, object["usage"] is [String: Any] { return object }
         guard depth < 4 else { return nil }
         for value in object.values {

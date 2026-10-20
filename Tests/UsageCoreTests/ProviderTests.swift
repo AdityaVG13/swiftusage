@@ -114,6 +114,25 @@ struct ProviderTests {
         #expect(stats.models.first?.tokens == TokenCounts(input: 200, output: 50, cacheRead: 800))
     }
 
+    // MARK: Muse
+
+    @Test func museRepeatedTurnCompletion() {
+        var record = FileRecord(isSubagent: false)
+        for (i, type) in ["token-usage", "turn_completed", "turn.completed", "TURN-COMPLETE"].enumerated() {
+            var line = json([
+                "id": "event-\(i)", "type": type, "turnId": "turn1",
+                "timestamp": "2026-10-18T10:00:00Z", "modelId": "muse-model",
+                "promptTokens": 100, "usage": ["outputTokens": 10],
+            ])
+            line.withUTF8 { bytes in
+                #expect(MuseTranscripts.ingest(UnsafeRawBufferPointer(bytes), lineOffset: UInt64(i * 200), pathHash: 77, into: &record))
+            }
+        }
+        #expect(record.usage.count == 1)
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.total } == 110)
+        #expect(record.messages.count == 2)
+    }
+
     // MARK: OpenCode
 
     @Test func openCodeReasoningIsAddedOnlyWhenSeparate() {
