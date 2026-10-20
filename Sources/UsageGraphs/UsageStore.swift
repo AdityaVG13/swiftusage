@@ -25,6 +25,7 @@ final class UsageStore {
     @ObservationIgnored private var data: [Provider: UsageData] = [:]
     @ObservationIgnored private var scanProgress: [Provider: ScanProgress] = [:]
     @ObservationIgnored private var watcher: DirectoryWatcher?
+    @ObservationIgnored private var watchedPaths: [String] = []
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var activeScans = 0
     @ObservationIgnored private var prices = PriceList.bundled
@@ -43,19 +44,13 @@ final class UsageStore {
             await updatePrices()
         }
         checkZstd()
-
-        let watched: [(provider: Provider, path: String)] = sources.flatMap { source in source.watchedPaths.map { (source.provider, $0) } }
-            .filter { FileManager.default.fileExists(atPath: $0.path) }
-        watcher = DirectoryWatcher(paths: watched.map { $0.path }) { [weak self] changed in
-            let providers = Set(watched.filter { entry in changed.contains { $0.hasPrefix(entry.path) } }.map { $0.provider })
-            Task { @MainActor in await self?.refresh(providers) }
-        }
-        watcher?.start()
+        updateWatcher()
 
         // Catches day rollover, newly installed tools and anything FSEvents coalesced away.
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.checkZstd()
+                self?.updateWatcher()
                 await self?.refresh()
                 await self?.updatePrices()
             }
@@ -132,6 +127,21 @@ final class UsageStore {
             let needsZstd = UsageSources.codexHasUnreadableRollouts()
             await MainActor.run { if self.codexNeedsZstd != needsZstd { self.codexNeedsZstd = needsZstd } }
         }
+    }
+
+    /// Rebuilds the FSEvents stream when a provider's folder appears or disappears after launch.
+    private func updateWatcher() {
+        let watched: [(provider: Provider, path: String)] = sources.flatMap { source in source.watchedPaths.map { (source.provider, $0) } }
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+        let paths = watched.map(\.path)
+        guard paths != watchedPaths else { return }
+        watchedPaths = paths
+        watcher?.stop()
+        watcher = DirectoryWatcher(paths: paths) { [weak self] changed in
+            let providers = Set(watched.filter { entry in changed.contains { $0.hasPrefix(entry.path) } }.map(\.provider))
+            Task { @MainActor in await self?.refresh(providers) }
+        }
+        watcher?.start()
     }
 
     private func scan(_ providers: Set<Provider>?, _ read: @escaping @Sendable (any UsageSource, (@Sendable (ScanProgress) -> Void)?) async -> UsageData) async {
