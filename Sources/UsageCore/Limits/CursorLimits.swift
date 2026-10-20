@@ -113,13 +113,23 @@ public struct CursorLimits: LimitsSource {
             }
         }
         if let onDemand = usage["spendLimitUsage"] as? [String: Any] {
-            let limit = JSONValue.number(onDemand["individualLimit"]) ?? JSONValue.number(onDemand["pooledLimit"])
-            let used = [onDemand["individualUsed"], onDemand["pooledUsed"], onDemand["totalSpend"]].compactMap(JSONValue.number).first { $0 > 0 } ?? 0
-            if let limit, limit > 0 {
-                result.meters.append(LimitMeter(id: "on-demand", label: "On-demand", used: used / 100, limit: limit / 100, unit: .dollars,
+            let individualLimit = JSONValue.number(onDemand["individualLimit"])
+            let pooledLimit = JSONValue.number(onDemand["pooledLimit"])
+            let individualUsed = JSONValue.number(onDemand["individualUsed"])
+            let pooledUsed = JSONValue.number(onDemand["pooledUsed"])
+            let totalSpend = JSONValue.number(onDemand["totalSpend"])
+            let scope: (limit: Double, used: Double)? = if let individualLimit, individualLimit > 0 {
+                (individualLimit, individualUsed ?? totalSpend ?? 0)
+            } else if let pooledLimit, pooledLimit > 0 {
+                (pooledLimit, pooledUsed ?? totalSpend ?? 0)
+            } else {
+                nil
+            }
+            if let scope {
+                result.meters.append(LimitMeter(id: "on-demand", label: "On-demand", used: scope.used / 100, limit: scope.limit / 100, unit: .dollars,
                                                 resetsAt: end, period: start.flatMap { start in end.map { $0.timeIntervalSince(start) } }))
-            } else if used > 0 {
-                result.notes.append(LimitNote(id: "on-demand", label: "On-demand", value: Format.dollars(used / 100) + " spent"))
+            } else if let spent = individualUsed ?? pooledUsed ?? totalSpend, spent > 0 {
+                result.notes.append(LimitNote(id: "on-demand", label: "On-demand", value: Format.dollars(spent / 100) + " spent"))
             }
         }
         if !result.hasValues {

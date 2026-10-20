@@ -480,6 +480,36 @@ struct LimitsTests {
         #expect(CursorLimits.dashboard(summary: nil, requests: nil).hasValues == false)
     }
 
+    @Test func cursorReadsOnDemandFromTheMatchingScope() throws {
+        let individual = CursorLimits.limits([
+            "spendLimitUsage": [
+                "individualLimit": 10_000,
+                "individualUsed": 0,
+                "pooledLimit": 100_000,
+                "pooledUsed": 5_000,
+            ],
+        ], planInfo: nil, id: "cursor:x", account: nil, plan: "Team")
+        let individualMeter = try #require(individual.meters.first(where: { $0.id == "on-demand" }))
+        #expect(individualMeter.used == 0)
+        #expect(individualMeter.limit == 100)
+
+        let pooled = CursorLimits.limits([
+            "spendLimitUsage": [
+                "individualLimit": 0,
+                "individualUsed": 0,
+                "pooledLimit": 100_000,
+                "pooledUsed": 5_000,
+            ],
+        ], planInfo: nil, id: "cursor:x", account: nil, plan: "Team")
+        let pooledMeter = try #require(pooled.meters.first(where: { $0.id == "on-demand" }))
+        #expect(pooledMeter.used == 50)
+        #expect(pooledMeter.limit == 1_000)
+
+        let unMetered = CursorLimits.limits(["spendLimitUsage": ["totalSpend": 1234]], planInfo: nil, id: "cursor:x", account: nil, plan: "Pro")
+        #expect(unMetered.meters.isEmpty)
+        #expect(unMetered.notes == [LimitNote(id: "on-demand", label: "On-demand", value: "$12.34 spent")])
+    }
+
     @Test func codexFindsEveryHome() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-codex-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
