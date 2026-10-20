@@ -82,7 +82,8 @@ struct ProtoMessage {
 
     /// A `google.protobuf.Timestamp` (seconds, nanos) as seconds since 1970.
     var timestamp: Double? {
-        guard let seconds = int(1) else { return nil }
-        return Timestamp.seconds(Double(seconds) + Double(int(2) ?? 0) / 1e9)
+        guard let seconds = int(1), seconds > 0 else { return nil }
+        let nanos = max(0, min(int(2) ?? 0, 999_999_999))
+        return Timestamp.seconds(Double(seconds) + Double(nanos) / 1e9)
     }
 }

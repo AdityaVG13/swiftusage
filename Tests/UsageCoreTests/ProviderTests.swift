@@ -448,6 +448,72 @@ struct ProviderTests {
         #expect(seen == [100])
     }
 
+    @Test func antigravityReadsACPTimestampFallbacksAndRetries() async throws {
+        func varint(_ value: UInt64) -> [UInt8] {
+            var value = value
+            var result: [UInt8] = []
+            repeat {
+                var byte = UInt8(value & 127)
+                value >>= 7
+                if value != 0 { byte |= 128 }
+                result.append(byte)
+            } while value != 0
+            return result
+        }
+        func bytes(_ number: Int, _ content: [UInt8]) -> [UInt8] {
+            varint(UInt64(number * 8 + 2)) + varint(UInt64(content.count)) + content
+        }
+        func number(_ field: Int, _ value: UInt64) -> [UInt8] {
+            varint(UInt64(field * 8)) + varint(value)
+        }
+        func hex(_ value: [UInt8]) -> String { Data(value).hexString }
+
+        #expect(AntigravitySource.defaultRoots.contains { $0.path.hasSuffix("/.gemini/antigravity-acp") })
+
+        let home = try TempProjects()
+        let acp = home.root.appendingPathComponent(".gemini/antigravity-acp")
+        let conversations = acp.appendingPathComponent("conversations")
+        try FileManager.default.createDirectory(at: conversations, withIntermediateDirectories: true)
+        let validTime = number(1, 1_792_317_600)
+        let sentinelTime = number(1, .max)
+
+        // Conversation 1: no `steps` table, sentinel timestamp on the generation, valid trajectory time.
+        var db1: OpaquePointer?
+        #expect(sqlite3_open(conversations.appendingPathComponent("c1.db").path, &db1) == SQLITE_OK)
+        func run1(_ sql: String) { #expect(sqlite3_exec(db1, sql, nil, nil, nil) == SQLITE_OK) }
+        run1("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)")
+        run1("CREATE TABLE trajectory_metadata_blob (id TEXT, data BLOB)")
+        run1("INSERT INTO trajectory_metadata_blob VALUES ('main', X'\(hex(bytes(2, validTime)))')")
+        let gen1Counts = number(2, 100) + number(3, 10) + bytes(11, Array("resp-1".utf8))
+        let gen1 = bytes(4, gen1Counts) + bytes(9, bytes(4, sentinelTime)) + bytes(19, Array("gemini-3-pro".utf8))
+        run1("INSERT INTO gen_metadata VALUES (0, X'\(hex(bytes(1, gen1)))')")
+        sqlite3_close(db1)
+
+        // Conversation 2: step timestamp in field 8, retries in model field 17 and step field 28, plus a generation with no matching step.
+        var db2: OpaquePointer?
+        #expect(sqlite3_open(conversations.appendingPathComponent("c2.db").path, &db2) == SQLITE_OK)
+        func run2(_ sql: String) { #expect(sqlite3_exec(db2, sql, nil, nil, nil) == SQLITE_OK) }
+        run2("CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)")
+        run2("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)")
+        run2("CREATE TABLE trajectory_metadata_blob (id TEXT, data BLOB)")
+        run2("INSERT INTO trajectory_metadata_blob VALUES ('main', X'\(hex(bytes(2, validTime)))')")
+        let retryByResponse = number(2, 50) + number(3, 5) + bytes(11, Array("retry-resp".utf8))
+        let retryByMessage = number(2, 20) + number(3, 2) + bytes(7, Array("retry-msg".utf8))
+        let stepMeta = bytes(8, validTime) + bytes(28, bytes(2, retryByResponse)) + bytes(28, bytes(2, retryByMessage))
+        run2("INSERT INTO steps VALUES (0, 15, X'\(hex(stepMeta))')")
+        let gen2aCounts = number(2, 200) + number(3, 20) + bytes(11, Array("resp-2a".utf8))
+        let gen2a = bytes(4, gen2aCounts) + bytes(17, bytes(2, retryByResponse)) + bytes(17, bytes(2, retryByMessage)) + bytes(19, Array("gemini-3-pro".utf8))
+        let gen2bCounts = number(2, 30) + number(3, 3) + bytes(11, Array("resp-2b".utf8))
+        let gen2b = bytes(4, gen2bCounts) + bytes(19, Array("gemini-3-pro".utf8))
+        run2("INSERT INTO gen_metadata VALUES (0, X'\(hex(bytes(1, gen2a)))'), (1, X'\(hex(bytes(1, gen2b)))')")
+        sqlite3_close(db2)
+
+        let data = await AntigravitySource(roots: [acp]).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.sessions == 2)
+        #expect(stats.totalTokens == 110 + 220 + 55 + 22 + 33)
+    }
+
     @Test func cursorSymlinkedChatIsCountedTwice() async throws {
         let home = try TempProjects()
         let chats = home.root.appendingPathComponent("chats")

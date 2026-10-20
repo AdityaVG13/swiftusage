@@ -16,7 +16,7 @@ public actor AntigravitySource: UsageSource {
 
     public static var defaultRoots: [URL] {
         let gemini = URL.home.appendingPathComponent(".gemini")
-        return ["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup"].map { gemini.appendingPathComponent($0) }
+        return ["antigravity", "antigravity-cli", "antigravity-ide", "antigravity-backup", "antigravity-acp"].map { gemini.appendingPathComponent($0) }
             + [URL.home.appendingPathComponent(".config/antigravity")]
     }
 
@@ -75,27 +75,45 @@ public actor AntigravitySource: UsageSource {
 
         static func read(_ db: SQLiteReader, id: String) -> Conversation? {
             var conversation = Conversation(id: id)
-            guard let hasSteps = db.hasTable("steps") else { return nil }
-            guard hasSteps else { return conversation }
+            guard let hasTrajectory = db.hasTable("trajectory_metadata_blob"),
+                  let hasSteps = db.hasTable("steps"),
+                  let hasMetadata = db.hasTable("gen_metadata")
+            else { return nil }
+
+            var trajectoryTime: Double?
+            if hasTrajectory {
+                guard db.rows("SELECT data FROM trajectory_metadata_blob ORDER BY rowid", [], { row in
+                    if trajectoryTime == nil {
+                        trajectoryTime = row.blob(0).flatMap(ProtoMessage.init)?.message(2)?.timestamp
+                    }
+                }) else { return nil }
+                if let trajectoryTime { conversation.start = min(conversation.start ?? trajectoryTime, trajectoryTime) }
+            }
+
             var responseTimes: [Double?] = []
-            guard db.rows("SELECT idx, step_type, metadata FROM steps ORDER BY idx", [], { row in
-                let type = row.int(1)
-                let time = row.blob(2).flatMap(ProtoMessage.init)?.message(1)?.timestamp
-                if let time { conversation.start = min(conversation.start ?? time, time) }
-                if type == 15 { responseTimes.append(time) }
-                guard type == 14 || type == 15, let time else { return }
-                conversation.messages[JSONLine.key("antigravity", id, String(row.int(0)))] = FileRecord.bucket(time)
-            }), let hasMetadata = db.hasTable("gen_metadata") else { return nil }
-            guard hasMetadata else { return conversation }
-            var position = 0
-            guard db.rows("SELECT idx, data FROM gen_metadata ORDER BY idx", [], { row in
-                defer { position += 1 }
-                guard let generation = row.blob(1).flatMap(ProtoMessage.init)?.message(1),
-                      let counts = generation.message(4)
-                else { return }
-                // The matching response step's time; IDE rows also carry their own.
-                let stepTime = position < responseTimes.count ? responseTimes[position] : nil
-                guard let time = stepTime ?? generation.message(9)?.message(4)?.timestamp else { return }
+            var stepRetries: [(stepIdx: Int64, retryIndex: Int, time: Double?, model: String?, counts: ProtoMessage)] = []
+            if hasSteps {
+                guard db.rows("SELECT idx, step_type, metadata FROM steps ORDER BY idx", [], { row in
+                    let type = row.int(1)
+                    let meta = row.blob(2).flatMap(ProtoMessage.init)
+                    let time = meta?.message(8)?.timestamp ?? meta?.message(1)?.timestamp
+                    if let time { conversation.start = min(conversation.start ?? time, time) }
+                    if type == 15 { responseTimes.append(time) }
+                    if let meta {
+                        let model = meta.message(24)?.string(12) ?? meta.message(24)?.string(8)
+                        for (retryIndex, data) in meta.allBytes(28).enumerated() {
+                            if let counts = ProtoMessage(data)?.message(2) {
+                                stepRetries.append((row.int(0), retryIndex, time, model, counts))
+                            }
+                        }
+                    }
+                    guard type == 14 || type == 15, let time else { return }
+                    conversation.messages[JSONLine.key("antigravity", id, String(row.int(0)))] = FileRecord.bucket(time)
+                }) else { return nil }
+            }
+
+            var keyByIdentity: [UInt64: UInt64] = [:]
+            func addUsage(_ counts: ProtoMessage, time: Double, model: String, fallbackKey: UInt64) {
                 // Input excludes cached tokens; output includes thinking.
                 guard let input = TokenCount.parse(counts.int(2) ?? 0),
                       let output = TokenCount.parse(counts.int(3) ?? 0),
@@ -104,10 +122,46 @@ public actor AntigravitySource: UsageSource {
                 else { return }
                 let tokens = TokenCounts(input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite)
                 guard tokens.total > 0 else { return }
-                let key = counts.string(11).map { JSONLine.key("antigravity-response", $0) }
-                    ?? JSONLine.key("antigravity", id, "generation", String(row.int(0)))
-                conversation.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: generation.string(19) ?? "gemini", tokens: tokens)
-            }) else { return nil }
+                let identities: [UInt64] = [
+                    counts.string(11).flatMap { $0.isEmpty ? nil : JSONLine.key("antigravity-response", $0) },
+                    counts.string(12).flatMap { $0.isEmpty ? nil : JSONLine.key("antigravity-provider-message", $0) },
+                    counts.string(7).flatMap { $0.isEmpty ? nil : JSONLine.key("antigravity-message", $0) },
+                ].compactMap { $0 }
+                let key = identities.compactMap({ keyByIdentity[$0] }).first ?? identities.first ?? fallbackKey
+                for identity in identities { keyByIdentity[identity] = key }
+                if let existing = conversation.usage[key], existing.tokens.total >= tokens.total { return }
+                conversation.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: model, tokens: tokens)
+            }
+
+            var lastModel: String?
+            if hasMetadata {
+                var position = 0
+                guard db.rows("SELECT idx, data FROM gen_metadata ORDER BY idx", [], { row in
+                    defer { position += 1 }
+                    guard let generation = row.blob(1).flatMap(ProtoMessage.init)?.message(1) else { return }
+                    if let ownModel = generation.string(19) { lastModel = ownModel }
+                    let model = generation.string(19) ?? lastModel ?? "gemini"
+                    let stepTime = position < responseTimes.count ? responseTimes[position] : nil
+                    guard let time = stepTime ?? generation.message(9)?.message(4)?.timestamp ?? trajectoryTime else { return }
+                    conversation.start = min(conversation.start ?? time, time)
+                    if let counts = generation.message(4) {
+                        addUsage(counts, time: time, model: model,
+                                 fallbackKey: JSONLine.key("antigravity", id, "generation", String(row.int(0))))
+                    }
+                    for (retryIndex, data) in generation.allBytes(17).enumerated() {
+                        if let counts = ProtoMessage(data)?.message(2) {
+                            addUsage(counts, time: time, model: model,
+                                     fallbackKey: JSONLine.key("antigravity", id, "generation-retry", String(row.int(0)), String(retryIndex)))
+                        }
+                    }
+                }) else { return nil }
+            }
+
+            for retry in stepRetries {
+                guard let time = retry.time ?? trajectoryTime ?? conversation.start else { continue }
+                addUsage(retry.counts, time: time, model: retry.model ?? lastModel ?? "gemini",
+                         fallbackKey: JSONLine.key("antigravity", id, "step-retry", String(retry.stepIdx), String(retry.retryIndex)))
+            }
             return conversation
         }
     }
