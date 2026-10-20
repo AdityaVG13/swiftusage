@@ -6,40 +6,33 @@ import UsageCore
 enum Main {
     @MainActor
     static func main() {
-        let arguments = CommandLine.arguments
-        if arguments.contains("--version") {
-            print("SwiftUsage \(AboutPanel.version)")
-            return
-        }
-        if arguments.contains("--help") || arguments.contains("-h") {
+        switch CLI.parse(Array(CommandLine.arguments.dropFirst())) {
+        case .app:
+            UsageGraphsApp.main()
+        case .help:
             print(help, terminator: "")
-            return
-        }
-        if let i = arguments.firstIndex(of: "--replay"), arguments.count > i + 3 {
-            Replay.run(source: arguments[i + 1], work: arguments[i + 2], output: arguments[i + 3])
-            return
-        }
-        if let i = arguments.firstIndex(of: "--price-table"), arguments.count > i + 2 {
+        case .version:
+            print("SwiftUsage \(AboutPanel.version)")
+        case let .limits(provider, json):
+            Limits.run(provider: provider, json: json)
+        case let .dump(provider, cold, json):
+            Dump.run(provider: provider, cold: cold, json: json)
+        case let .replay(source, work, output):
+            Replay.run(source: source, work: work, output: output)
+        case let .priceTable(litellmPath, supplementPath):
             // Used by scripts/update-prices.sh to write BundledPrices.swift.
-            guard let litellm = FileManager.default.contents(atPath: arguments[i + 1]),
-                  let supplement = FileManager.default.contents(atPath: arguments[i + 2]),
+            guard let litellm = FileManager.default.contents(atPath: litellmPath),
+                  let supplement = FileManager.default.contents(atPath: supplementPath),
                   let source = PriceSources.bundledSource(litellm: litellm, supplement: supplement)
             else {
                 FileHandle.standardError.write(Data("Couldn't read the price lists\n".utf8))
                 exit(1)
             }
             print(source, terminator: "")
-            return
+        case let .usageError(message):
+            FileHandle.standardError.write(Data("swiftusage: \(message)\nRun swiftusage --help for the options.\n".utf8))
+            exit(2)
         }
-        if arguments.contains("--limits") {
-            Limits.run(json: arguments.contains("--json"))
-            return
-        }
-        if arguments.contains("--dump") {
-            Dump.run(cold: arguments.contains("--cold"), json: arguments.contains("--json"))
-            return
-        }
-        UsageGraphsApp.main()
     }
 
     static let help = """
@@ -56,12 +49,136 @@ enum Main {
         """
 }
 
+/// Parses command-line arguments into either the menu bar app, one validated CLI command, or an error.
+enum CLI {
+    case app
+    case help
+    case version
+    case limits(provider: Provider?, json: Bool)
+    case dump(provider: Provider?, cold: Bool, json: Bool)
+    case replay(source: String, work: String, output: String)
+    case priceTable(litellm: String, supplement: String)
+    case usageError(String)
+
+    private enum Command {
+        case help
+        case version
+        case limits
+        case dump
+        case replay(String, String, String)
+        case priceTable(String, String)
+    }
+
+    static func parse(_ arguments: [String]) -> CLI {
+        guard arguments.contains(where: { $0.hasPrefix("--") || $0 == "-h" }) else {
+            return .app
+        }
+        var command: (name: String, value: Command)?
+        var json = false
+        var cold = false
+        var provider: Provider?
+        var i = 0
+
+        func setCommand(_ name: String, _ value: Command) -> String? {
+            if let existing = command {
+                return existing.name == name ? "\(name) given more than once" : "cannot combine \(existing.name) and \(name)"
+            }
+            command = (name, value)
+            return nil
+        }
+
+        while i < arguments.count {
+            let arg = arguments[i]
+            switch arg {
+            case "--help", "-h":
+                if let error = setCommand(arg, .help) { return .usageError(error) }
+                i += 1
+            case "--version":
+                if let error = setCommand(arg, .version) { return .usageError(error) }
+                i += 1
+            case "--limits":
+                if let error = setCommand(arg, .limits) { return .usageError(error) }
+                i += 1
+            case "--dump":
+                if let error = setCommand(arg, .dump) { return .usageError(error) }
+                i += 1
+            case "--replay":
+                guard i + 3 < arguments.count else {
+                    return .usageError("--replay requires <projects> <work dir> <output prefix>")
+                }
+                if let error = setCommand(arg, .replay(arguments[i + 1], arguments[i + 2], arguments[i + 3])) {
+                    return .usageError(error)
+                }
+                i += 4
+            case "--price-table":
+                guard i + 2 < arguments.count else {
+                    return .usageError("--price-table requires <litellm> <supplement>")
+                }
+                if let error = setCommand(arg, .priceTable(arguments[i + 1], arguments[i + 2])) {
+                    return .usageError(error)
+                }
+                i += 3
+            case "--json":
+                json = true
+                i += 1
+            case "--cold":
+                cold = true
+                i += 1
+            case "--provider":
+                guard i + 1 < arguments.count else {
+                    return .usageError("--provider requires a provider id")
+                }
+                if provider != nil {
+                    return .usageError("--provider given more than once")
+                }
+                let raw = arguments[i + 1]
+                guard let parsed = Provider(rawValue: raw) else {
+                    let valid = Provider.allCases.map(\.rawValue).joined(separator: ", ")
+                    return .usageError("unknown provider '\(raw)' (valid ids: \(valid))")
+                }
+                provider = parsed
+                i += 2
+            default:
+                if arg.hasPrefix("-") {
+                    return .usageError("unknown option \(arg)")
+                }
+                return .usageError("unexpected argument \(arg)")
+            }
+        }
+
+        guard let command else {
+            if cold { return .usageError("--cold requires --dump") }
+            if json { return .usageError("--json requires --limits or --dump") }
+            if provider != nil { return .usageError("--provider requires --limits or --dump") }
+            return .usageError("no command given")
+        }
+
+        switch command.value {
+        case .help:
+            if json || cold || provider != nil { return .usageError("\(command.name) takes no modifiers") }
+            return .help
+        case .version:
+            if json || cold || provider != nil { return .usageError("--version takes no modifiers") }
+            return .version
+        case .limits:
+            if cold { return .usageError("--cold can only be used with --dump") }
+            return .limits(provider: provider, json: json)
+        case .dump:
+            return .dump(provider: provider, cold: cold, json: json)
+        case let .replay(source, work, output):
+            if json || cold || provider != nil { return .usageError("--replay takes no modifiers") }
+            return .replay(source: source, work: work, output: output)
+        case let .priceTable(litellm, supplement):
+            if json || cold || provider != nil { return .usageError("--price-table takes no modifiers") }
+            return .priceTable(litellm: litellm, supplement: supplement)
+        }
+    }
+}
+
 /// `swiftusage --dump [--provider <id>] [--cold] [--json]` prints the numbers the panel would show, for
 /// checking against other tools. `--json` writes a provider's per-day report (Claude Code by default).
 enum Dump {
-    static func run(cold: Bool, json: Bool) {
-        let arguments = CommandLine.arguments
-        let only = arguments.firstIndex(of: "--provider").flatMap { arguments.indices.contains($0 + 1) ? Provider(rawValue: arguments[$0 + 1]) : nil }
+    static func run(provider only: Provider?, cold: Bool, json: Bool) {
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             let sources = UsageSources.all(cached: !cold, readOnly: true)
@@ -146,9 +263,7 @@ enum Dump {
 /// `swiftusage --limits [--provider <id>] [--json]` prints every signed-in account's plan limits, for
 /// scripts and agents.
 enum Limits {
-    static func run(json: Bool) {
-        let arguments = CommandLine.arguments
-        let only = arguments.firstIndex(of: "--provider").flatMap { arguments.indices.contains($0 + 1) ? Provider(rawValue: arguments[$0 + 1]) : nil }
+    static func run(provider only: Provider?, json: Bool) {
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             let accounts = await LimitsSources.fetch(LimitsSources.all().filter { only == nil || $0.provider == only })
