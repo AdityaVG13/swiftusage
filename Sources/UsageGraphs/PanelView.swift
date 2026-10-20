@@ -151,19 +151,19 @@ private struct Caption: View {
         let provider = state.provider
         if state.tab == .limits { return limitsText }
         guard store.hasLoaded, let stats = store.stats[provider]?[state.range] else { return "Reading your coding agents' history…" }
+        let zstd = "Install zstd (brew install zstd) to count older Codex sessions."
         if let provider, !store.providersWithData.contains(provider) {
-            return "No \(provider.name) history found on this Mac yet."
+            // Codex history that's all compressed reads as none until zstd can open it.
+            return provider == .codex && store.codexNeedsZstd ? zstd : "No \(provider.name) history found on this Mac yet."
         }
         if provider == nil, store.providersWithData.isEmpty {
-            return "No coding agent history found on this Mac yet."
+            return store.codexNeedsZstd ? zstd : "No coding agent history found on this Mac yet."
         }
         let noUsage = "No \(provider?.name ?? "coding agent") usage in this period."
         switch state.tab {
         case .overview:
             if let day = state.hoveredDay { return dayDescription(day, stats: stats) }
-            if provider == .codex, store.codexNeedsZstd {
-                return "Install zstd (brew install zstd) to count older Codex sessions."
-            }
+            if provider == .codex, store.codexNeedsZstd { return zstd }
             if provider == .cursor {
                 return "Cursor keeps token counts on its servers, not on this Mac."
             }
