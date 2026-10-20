@@ -13,6 +13,8 @@ final class LimitsStore {
     private(set) var accounts: [AccountLimits] = []
     private(set) var isLoading = false
     private(set) var lastFetched: Date?
+    /// Providers read at least once since the app started.
+    private(set) var readProviders: Set<Provider> = []
     /// Limit resets being used, and what came of the last use, by account.
     private(set) var resetUses: [String: ResetUse] = [:]
     /// Meters shown in the menu bar, as `account id/meter id`.
@@ -58,6 +60,11 @@ final class LimitsStore {
     /// Every account of the providers that are on, including ones turned off, for Customize.
     var followedAccounts: [AccountLimits] {
         accounts.filter { preferences.isShown($0.provider) }
+    }
+
+    /// Whether the person hid any of `provider`'s accounts (or any account, for nil) in Customize.
+    func hasHiddenAccounts(for provider: Provider?) -> Bool {
+        followedAccounts.contains { (provider.map($0.isUsed(by:)) ?? true) && hidden.contains($0.id) }
     }
 
     func isShown(_ account: AccountLimits) -> Bool {
@@ -182,6 +189,7 @@ final class LimitsStore {
             if !defaults.isEmpty { pins = defaults }
         }
         lastFetched = Date()
+        readProviders.formUnion(shown)
         isLoading = false
         save()
     }

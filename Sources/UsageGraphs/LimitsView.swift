@@ -49,7 +49,11 @@ struct LimitsView: View {
     }
 
     private var emptyText: String {
-        if limits.accounts.isEmpty, limits.isLoading { return "Reading your plan limits…" }
+        let unread = provider.map { !limits.readProviders.contains($0) } ?? limits.readProviders.isEmpty
+        if limits.isLoading, unread { return "Reading your plan limits…" }
+        if limits.hasHiddenAccounts(for: provider) {
+            return "Your \(provider.map { $0.name + " " } ?? "")accounts are hidden. Show them in Customize."
+        }
         guard let provider else { return "No coding agent with plan limits is signed in on this Mac." }
         switch provider {
         // Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
