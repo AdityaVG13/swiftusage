@@ -686,9 +686,8 @@ struct LimitsTests {
         let sent = Mutex<[URLRequest]>([])
         try await HTTP.$transport.withValue({ request in
             sent.withLock { $0.append(request) }
-            let body: String = if request.url!.path == "/oauth/token" {
-                #"{"access_token":"\#(cliToken)"}"#
-            } else if request.url!.path.hasSuffix("GetPlanInfo") {
+            #expect(request.url!.path != "/oauth/token")
+            let body: String = if request.url!.path.hasSuffix("GetPlanInfo") {
                 #"{"planInfo":{"planName":"Pro"}}"#
             } else {
                 #"{"planUsage":{"totalPercentUsed":25}}"#
@@ -715,12 +714,13 @@ struct LimitsTests {
             #expect(fromKeychain.first?.id == "cursor:auth0|cli-user")
             #expect(fromKeychain.first?.meters.first?.used == 25)
 
+            // A refresh token alone isn't renewed here, which could sign Cursor out: the login reads as expired.
             let fromRefresh = await CursorLimits().fetch(home: home) { item in
                 item.service == "cursor-refresh-token" ? .password("cli-refresh") : .missing
             }
             #expect(fromRefresh.count == 1)
-            #expect(fromRefresh.first?.id == "cursor:auth0|cli-user")
-            #expect(fromRefresh.first?.meters.first?.used == 25)
+            #expect(fromRefresh.first?.problem == "Login expired. Run `agent login` to renew it.")
+            #expect(fromRefresh.first?.meters.isEmpty == true)
 
             let waiting = await CursorLimits().fetch(home: home) { item in
                 item.service == "cursor-access-token" ? .needsPermission : .missing

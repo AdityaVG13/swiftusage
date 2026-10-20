@@ -5,7 +5,6 @@ import Foundation
 public struct CursorLimits: LimitsSource {
     public let provider = Provider.cursor
     private static let api = "https://api2.cursor.sh/aiserver.v1.DashboardService/"
-    private static let clientID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 
     public init() {}
 
@@ -96,26 +95,14 @@ public struct CursorLimits: LimitsSource {
     private func limits(for login: Login) async -> AccountLimits {
         let email = login.email
         let renewHint = login.source == .ide ? "Open Cursor to renew it." : "Run `agent login` to renew it."
-        var token = login.access
-        let needsRefresh = token == nil || (token.flatMap(JWT.expiry).map { $0 <= HTTP.now().addingTimeInterval(5 * 60) } ?? false)
-        var renewed = false
-        if needsRefresh, let refresh = login.refresh {
-            renewed = true
-            if let refreshed = await Self.renew(refresh) { token = refreshed }
-        }
-        let id = "cursor:" + (Self.subject(token) ?? login.subject ?? "default")
-        guard var token else {
-            return .failed(id, provider, account: email, "Login expired. \(renewHint)")
-        }
-        if let expiry = JWT.expiry(token), expiry < HTTP.now() {
+        // The access token is only read, never renewed here: renewing could rotate the refresh token Cursor
+        // keeps and sign Cursor out. Cursor renews it itself.
+        let id = "cursor:" + (Self.subject(login.access) ?? login.subject ?? "default")
+        guard let token = login.access, JWT.expiry(token).map({ $0 >= HTTP.now() }) ?? true else {
             return .failed(id, provider, account: email, "Login expired. \(renewHint)")
         }
 
-        var (planResponse, usageResponse) = await Self.query(token: token)
-        if usageResponse?.status == 401, !renewed, let refresh = login.refresh, let refreshed = await Self.renew(refresh) {
-            token = refreshed
-            (planResponse, usageResponse) = await Self.query(token: token)
-        }
+        let (planResponse, usageResponse) = await Self.query(token: token)
         let planInfo = planResponse?.json?["planInfo"] as? [String: Any]
         let plan = (planInfo?["planName"] as? String) ?? login.membership?.replacingOccurrences(of: "unified_", with: "").titleCased
 
@@ -154,15 +141,6 @@ public struct CursorLimits: LimitsSource {
         async let planResponse = HTTP.post(api + "GetPlanInfo", headers: headers, json: [String: Any](), timeout: 20)
         let usageResponse = await HTTP.post(api + "GetCurrentPeriodUsage", headers: headers, json: [String: Any](), timeout: 20)
         return (await planResponse, usageResponse)
-    }
-
-    private static func renew(_ refresh: String) async -> String? {
-        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": clientID, "refresh_token": refresh]
-        guard let response = await HTTP.post("https://api2.cursor.sh/oauth/token", json: body),
-              response.ok, response.json?["shouldLogout"] as? Bool != true,
-              let token = trimmed(response.json?["access_token"] as? String)
-        else { return nil }
-        return token
     }
 
     private static func subject(_ token: String?) -> String? {
