@@ -48,7 +48,7 @@ enum Main {
         With no options it runs the menu bar app. In a terminal:
 
           swiftusage --limits [--provider <id>] [--json]   every signed-in account's plan limits
-          swiftusage --dump [--provider <id>] [--cold]     the numbers the panel shows, per provider
+          swiftusage --dump [--provider <id>] [--cold] [--json]  the numbers the panel shows, per provider
           swiftusage --version                             the version
 
         Providers: \(Provider.allCases.map(\.rawValue).joined(separator: ", "))
@@ -56,23 +56,26 @@ enum Main {
         """
 }
 
-/// `swiftusage --dump [--provider <id>] [--cold]` prints the numbers the panel would show, for checking
-/// against other tools. `--json` writes Claude Code's per-day report for `scripts/verify.sh`.
+/// `swiftusage --dump [--provider <id>] [--cold] [--json]` prints the numbers the panel would show, for
+/// checking against other tools. `--json` writes a provider's per-day report (Claude Code by default).
 enum Dump {
     static func run(cold: Bool, json: Bool) {
         let arguments = CommandLine.arguments
         let only = arguments.firstIndex(of: "--provider").flatMap { arguments.indices.contains($0 + 1) ? Provider(rawValue: arguments[$0 + 1]) : nil }
         let done = DispatchSemaphore(value: 0)
         Task.detached {
+            let sources = UsageSources.all(cached: !cold, readOnly: true)
             if json {
-                let data = await UsageIndex(cacheURL: cold ? nil : UsageIndex.defaultCacheURL, readOnly: true).refresh()
+                let target = only ?? .claude
+                let source = sources.first { $0.provider == target }!
+                let data = await source.refresh(progress: nil)
                 FileHandle.standardOutput.write(jsonReport(data))
                 print()
                 done.signal()
                 return
             }
             let prices = await PriceUpdates.shared.current()
-            for source in UsageSources.all(cached: !cold, readOnly: true) where only == nil || source.provider == only {
+            for source in sources where only == nil || source.provider == only {
                 let started = Date()
                 let data = await source.refresh(progress: nil)
                 let elapsed = Date().timeIntervalSince(started)

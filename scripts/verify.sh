@@ -16,7 +16,7 @@ mkdir -p "$WORK/snapshot"
 cp -cR "$SOURCE" "$WORK/snapshot/projects"
 echo "Snapshot: $(find "$WORK/snapshot/projects" -name '*.jsonl' | wc -l | tr -d ' ') transcripts"
 
-CLAUDE_CONFIG_DIR="$WORK/snapshot" "$BIN" --dump --cold --json > "$WORK/app.json"
+CLAUDE_CONFIG_DIR="$WORK/snapshot" "$BIN" --dump --provider claude --cold --json > "$WORK/app.json"
 python3 -I scripts/verify/reference.py "$WORK/snapshot/projects" > "$WORK/reference.json"
 echo "\nApp vs independent reference:"
 python3 -I scripts/verify/compare.py "$WORK/app.json" "$WORK/reference.json"
