@@ -29,8 +29,9 @@ public actor AntigravitySource: UsageSource {
                 let path = folder + "/" + name
                 guard let stamp = DatabaseStamp(path: path) else { continue }
                 if conversations[path]?.stamp == stamp { continue }
-                guard let reader = SQLiteReader(path: path) else { continue }
-                var conversation = Conversation.read(reader, id: String(name.dropLast(3)))
+                guard let reader = SQLiteReader(path: path),
+                      var conversation = Conversation.read(reader, id: String(name.dropLast(3)))
+                else { continue }
                 conversation.stamp = stamp
                 conversations[path] = conversation
             }
@@ -71,21 +72,22 @@ public actor AntigravitySource: UsageSource {
         var messages: [UInt64: Int32] = [:]
         var usage: [UInt64: UsageRecord] = [:]
 
-        static func read(_ db: SQLiteReader, id: String) -> Conversation {
+        static func read(_ db: SQLiteReader, id: String) -> Conversation? {
             var conversation = Conversation(id: id)
-            guard db.hasTable("steps") else { return conversation }
+            guard let hasSteps = db.hasTable("steps") else { return nil }
+            guard hasSteps else { return conversation }
             var responseTimes: [Double?] = []
-            db.rows("SELECT idx, step_type, metadata FROM steps ORDER BY idx") { row in
+            guard db.rows("SELECT idx, step_type, metadata FROM steps ORDER BY idx", [], { row in
                 let type = row.int(1)
                 let time = row.blob(2).flatMap(ProtoMessage.init)?.message(1)?.timestamp
                 if let time { conversation.start = min(conversation.start ?? time, time) }
                 if type == 15 { responseTimes.append(time) }
                 guard type == 14 || type == 15, let time else { return }
                 conversation.messages[JSONLine.key("antigravity", id, String(row.int(0)))] = FileRecord.bucket(time)
-            }
-            guard db.hasTable("gen_metadata") else { return conversation }
+            }), let hasMetadata = db.hasTable("gen_metadata") else { return nil }
+            guard hasMetadata else { return conversation }
             var position = 0
-            db.rows("SELECT idx, data FROM gen_metadata ORDER BY idx") { row in
+            guard db.rows("SELECT idx, data FROM gen_metadata ORDER BY idx", [], { row in
                 defer { position += 1 }
                 guard let generation = row.blob(1).flatMap(ProtoMessage.init)?.message(1),
                       let counts = generation.message(4)
@@ -104,7 +106,7 @@ public actor AntigravitySource: UsageSource {
                 let key = counts.string(11).map { JSONLine.key("antigravity-response", $0) }
                     ?? JSONLine.key("antigravity", id, "generation", String(row.int(0)))
                 conversation.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: generation.string(19) ?? "gemini", tokens: tokens)
-            }
+            }) else { return nil }
             return conversation
         }
     }

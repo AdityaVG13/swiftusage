@@ -29,8 +29,7 @@ public actor DevinSource: UsageSource {
             let path = folder + "/sessions.db"
             guard let stamp = DatabaseStamp(path: path) else { continue }
             var database = databases[path] ?? Database()
-            guard database.stamp != stamp, let reader = SQLiteReader(path: path) else { continue }
-            database.read(reader)
+            guard database.stamp != stamp, let reader = SQLiteReader(path: path), database.read(reader) else { continue }
             database.stamp = stamp
             databases[path] = database
         }
@@ -91,16 +90,19 @@ public actor DevinSource: UsageSource {
         var sessions: [String: Session] = [:]
         var messages: [String: Message] = [:]
 
-        mutating func read(_ db: SQLiteReader) {
-            guard db.hasTable("sessions"), db.hasTable("message_nodes") else { return }
-            db.rows("SELECT id, created_at, hidden, model FROM sessions") { row in
+        @discardableResult
+        mutating func read(_ db: SQLiteReader) -> Bool {
+            guard let hasSessions = db.hasTable("sessions"), let hasNodes = db.hasTable("message_nodes") else { return false }
+            guard hasSessions, hasNodes else { return true }
+            var next = self
+            guard db.rows("SELECT id, created_at, hidden, model FROM sessions", [], { row in
                 guard let id = row.text(0), let created = Timestamp.seconds(row.double(1)) else { return }
-                sessions[id] = Session(created: created, hidden: row.int(2) != 0, model: row.text(3) ?? "unknown")
-            }
+                next.sessions[id] = Session(created: created, hidden: row.int(2) != 0, model: row.text(3) ?? "unknown")
+            }) else { return false }
             // Only user and assistant rows matter; the role is near the start of the JSON, so tool
             // results (often whole files) are skipped without being parsed.
-            var latest = lastRow
-            db.rows("""
+            var latest = next.lastRow
+            guard db.rows("""
                 SELECT row_id, session_id, created_at,
                        json_extract(chat_message, '$.message_id'), json_extract(chat_message, '$.role'),
                        json_extract(chat_message, '$.metadata.is_user_input'), json_extract(chat_message, '$.metadata.created_at'),
@@ -110,11 +112,11 @@ public actor DevinSource: UsageSource {
                 FROM message_nodes
                 WHERE row_id > ? AND (substr(chat_message, 1, 200) LIKE '%"role":"assistant"%' OR substr(chat_message, 1, 200) LIKE '%"role":"user"%')
                 ORDER BY row_id
-                """, [lastRow]) { row in
+                """, [next.lastRow], { row in
                 latest = max(latest, row.int(0))
                 guard let session = row.text(1), let role = row.text(4) else { return }
                 let id = row.text(3) ?? "\(session)#\(row.int(0))"
-                guard messages[id] == nil else { return }
+                guard next.messages[id] == nil else { return }
                 guard let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2)) else { return }
                 let isAssistant = role == "assistant"
                 let tokens: TokenCounts
@@ -126,10 +128,12 @@ public actor DevinSource: UsageSource {
                 } else {
                     tokens = TokenCounts()
                 }
-                messages[id] = Message(session: session, created: created, counts: isAssistant || row.int(5) != 0,
-                                       model: row.text(7), tokens: tokens)
-            }
-            lastRow = latest
+                next.messages[id] = Message(session: session, created: created, counts: isAssistant || row.int(5) != 0,
+                                            model: row.text(7), tokens: tokens)
+            }) else { return false }
+            next.lastRow = latest
+            self = next
+            return true
         }
     }
 }

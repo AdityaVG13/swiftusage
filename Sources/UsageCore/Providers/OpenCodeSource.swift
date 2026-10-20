@@ -24,8 +24,7 @@ public actor OpenCodeSource: UsageSource {
         for path in databasePaths() {
             guard let stamp = DatabaseStamp(path: path) else { continue }
             var database = databases[path] ?? Database()
-            guard database.stamp != stamp, let reader = SQLiteReader(path: path) else { continue }
-            database.read(reader)
+            guard database.stamp != stamp, let reader = SQLiteReader(path: path), database.read(reader) else { continue }
             database.stamp = stamp
             databases[path] = database
         }
@@ -98,49 +97,61 @@ public actor OpenCodeSource: UsageSource {
         /// Messages the `message` table has, which wins over `session_message`'s copy.
         var inMessageTable: Set<String> = []
 
-        mutating func read(_ db: SQLiteReader) {
-            for table in ["session", "session_v2"] where db.hasTable(table) {
-                db.rows("SELECT id, parent_id, time_created FROM \(table)") { row in
-                    guard let id = row.text(0), sessions[id] == nil,
+        @discardableResult
+        mutating func read(_ db: SQLiteReader) -> Bool {
+            var next = self
+            for table in ["session", "session_v2"] {
+                guard let present = db.hasTable(table) else { return false }
+                guard present else { continue }
+                let ok = db.rows("SELECT id, parent_id, time_created FROM \(table)") { row in
+                    guard let id = row.text(0), next.sessions[id] == nil,
                           Timestamp.seconds(Double(row.int(2)) / 1000) != nil
                     else { return }
-                    sessions[id] = Session(created: row.int(2), parent: row.text(1))
+                    next.sessions[id] = Session(created: row.int(2), parent: row.text(1))
                 }
+                guard ok else { return false }
             }
             // Rows are updated in place when a response finishes; a minute of slack covers clock skew
             // between writes.
-            let after = max(0, since - 60_000)
-            var latest = since
+            let after = max(0, next.since - 60_000)
+            var latest = next.since
             let tokens = """
                 json_extract(data, '$.tokens.input'), json_extract(data, '$.tokens.output'),
                 json_extract(data, '$.tokens.reasoning'), json_extract(data, '$.tokens.cache.read'),
                 json_extract(data, '$.tokens.cache.write'), json_extract(data, '$.tokens.total'), json_extract(data, '$.cost')
                 """
-            if db.hasTable("message") {
-                db.rows("""
+            guard let hasMessage = db.hasTable("message"),
+                  let hasSessionMessage = db.hasTable("session_message")
+            else { return false }
+            if hasMessage {
+                let ok = db.rows("""
                     SELECT id, session_id, time_created, time_updated, json_extract(data, '$.role'),
                            json_extract(data, '$.modelID'), json_extract(data, '$.providerID'), \(tokens)
-                    FROM message WHERE time_updated >= ?
+                    FROM message WHERE time_updated >= ? AND json_valid(data)
                     """, [after]) { row in
                     latest = max(latest, row.int(3))
-                    if let id = row.text(0) { inMessageTable.insert(id) }
-                    add(row, role: row.text(4), model: row.text(5), provider: row.text(6), reasoningAlwaysSeparate: false)
+                    if let id = row.text(0) { next.inMessageTable.insert(id) }
+                    next.add(row, role: row.text(4), model: row.text(5), provider: row.text(6), reasoningAlwaysSeparate: false)
                 }
+                guard ok else { return false }
             }
             // Newer builds' table. It repeats most of `message`; rows only here are added.
-            if db.hasTable("session_message") {
-                db.rows("""
+            if hasSessionMessage {
+                let ok = db.rows("""
                     SELECT id, session_id, time_created, time_updated, type,
                            json_extract(data, '$.model.id'), json_extract(data, '$.model.providerID'), \(tokens)
-                    FROM session_message WHERE time_updated >= ? AND type IN ('user', 'assistant')
+                    FROM session_message WHERE time_updated >= ? AND type IN ('user', 'assistant') AND json_valid(data)
                     """, [after]) { row in
                     latest = max(latest, row.int(3))
                     // Rows only here are updated in place as a response streams, so a later read replaces them.
-                    guard let id = row.text(0), !inMessageTable.contains(id) else { return }
-                    add(row, role: row.text(4), model: row.text(5), provider: row.text(6), reasoningAlwaysSeparate: true)
+                    guard let id = row.text(0), !next.inMessageTable.contains(id) else { return }
+                    next.add(row, role: row.text(4), model: row.text(5), provider: row.text(6), reasoningAlwaysSeparate: true)
                 }
+                guard ok else { return false }
             }
-            since = latest
+            next.since = latest
+            self = next
+            return true
         }
 
         private mutating func add(_ row: SQLiteReader.Row, role: String?, model: String?, provider: String?, reasoningAlwaysSeparate: Bool) {

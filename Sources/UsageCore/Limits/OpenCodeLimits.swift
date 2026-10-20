@@ -45,7 +45,7 @@ public struct OpenCodeLimits: LimitsSource {
         let root = OpenCodeSource.defaultRoot
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
         for name in names.sorted() where name.hasPrefix("opencode") && name.hasSuffix(".db") {
-            guard let reader = SQLiteReader(path: root.appendingPathComponent(name).path), reader.hasTable("credential") else { continue }
+            guard let reader = SQLiteReader(path: root.appendingPathComponent(name).path), reader.hasTable("credential") == true else { continue }
             var key: String?
             reader.rows("""
                 SELECT json_extract(value, '$.key') FROM credential

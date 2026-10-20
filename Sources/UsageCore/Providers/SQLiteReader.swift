@@ -25,18 +25,21 @@ final class SQLiteReader {
         sqlite3_close(db)
     }
 
-    func hasTable(_ name: String) -> Bool {
+    func hasTable(_ name: String) -> Bool? {
         var found = false
-        rows("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [name]) { _ in found = true }
+        guard rows("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [name], { _ in found = true }) else {
+            return nil
+        }
         return found
     }
 
     /// Runs `sql` with `arguments` bound in order, calling `body` for each row. Errors end the query.
-    func rows(_ sql: String, _ arguments: [Any] = [], _ body: (Row) -> Void) {
+    @discardableResult
+    func rows(_ sql: String, _ arguments: [Any] = [], _ body: (Row) -> Void) -> Bool {
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             sqlite3_finalize(statement)
-            return
+            return false
         }
         defer { sqlite3_finalize(statement) }
         for (offset, argument) in arguments.enumerated() {
@@ -48,8 +51,13 @@ final class SQLiteReader {
             default: sqlite3_bind_null(statement, position)
             }
         }
-        while sqlite3_step(statement) == SQLITE_ROW {
-            body(Row(statement: statement))
+        while true {
+            let step = sqlite3_step(statement)
+            if step == SQLITE_ROW {
+                body(Row(statement: statement))
+            } else {
+                return step == SQLITE_DONE
+            }
         }
     }
 
