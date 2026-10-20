@@ -228,13 +228,15 @@ public enum LimitsSources {
             return previous[match[0].id] == nil
         }
         var missing: [AccountLimits] = []
+        var seenMissing: Set<String> = []
         var resting: [AccountLimits] = []
         for account in accounts where !found.contains(account.id) {
             guard asked.contains(account.provider) else {
                 resting.append(account)
                 continue
             }
-            guard !renamed(account), account.hasValues, now.timeIntervalSince(account.updated) < .day else { continue }
+            guard !renamed(account), account.hasValues, now.timeIntervalSince(account.updated) < .day,
+                  seenMissing.insert(account.id).inserted else { continue }
             let since = missingSince[account.id] ?? now
             var account = account
             account.meters = account.metersRolledOver(at: now)
@@ -243,7 +245,7 @@ public enum LimitsSources {
             }
             missing.append(account)
         }
-        missingSince = Dictionary(uniqueKeysWithValues: missing.map { ($0.id, missingSince[$0.id] ?? now) })
+        missingSince = Dictionary(missing.map { ($0.id, missingSince[$0.id] ?? now) }, uniquingKeysWith: { first, _ in first })
         return (fresh.map { $0.keepingValues(of: previous[$0.id], now: now) } + missing + resting)
             .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
     }

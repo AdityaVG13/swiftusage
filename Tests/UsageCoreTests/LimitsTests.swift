@@ -702,6 +702,20 @@ struct LimitsTests {
         #expect(sameOrigin.status == 200)
         #expect(sameOrigin.json?["sameOrigin"] as? Bool == true)
     }
+
+    @Test func duplicateMissingAccountsTrapInLimitsSourcesUpdate() {
+        let card = AccountLimits(
+            id: "claude:acc|org",
+            provider: .claude,
+            account: "Personal",
+            meters: [.percent("session", "Session", used: 42, resetsAt: now.addingTimeInterval(3600), period: 18_000)],
+            updated: now.addingTimeInterval(-60)
+        )
+        var missingSince: [String: Date] = [:]
+        let updated = LimitsSources.update([card, card], with: [], asked: [.claude], missingSince: &missingSince, now: now)
+        #expect(updated == [card])
+        #expect(missingSince == ["claude:acc|org": now])
+    }
 }
 
 private final class LoopbackServer: @unchecked Sendable {
