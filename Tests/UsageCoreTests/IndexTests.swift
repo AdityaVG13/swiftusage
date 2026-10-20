@@ -169,6 +169,28 @@ struct IndexTests {
         #expect(stats.totalTokens == 4 * (1 + 10 + 100 + 1000))
     }
 
+    @Test func manyCopiedPairsDeduplicateWithoutQuadraticScan() async throws {
+        let projects = try TempProjects()
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: nil)
+        let stamp = Timestamp.parse("2026-10-18T08:00:00Z")!
+        let bucket = FileRecord.bucket(stamp)
+        var records: [String: FileRecord] = [:]
+        records.reserveCapacity(12_000)
+        for pair in 0..<6000 {
+            var record = FileRecord(isSubagent: false)
+            record.sessionStart = stamp + Double(pair)
+            record.messages[UInt64(pair + 1)] = bucket
+            records[String(format: "-p/c%05d-a.jsonl", pair)] = record
+            records[String(format: "-p/c%05d-b.jsonl", pair)] = record
+        }
+        let started = Date()
+        let data = await index.aggregate(records)
+        let elapsed = Date().timeIntervalSince(started)
+        #expect(data.sessionStarts.count == 6000)
+        #expect(data.messageBuckets == [bucket: 6000])
+        #expect(elapsed < 1.0)
+    }
+
     @Test func daylightSavingDays() {
         let warsaw = DayClock(timeZone: TimeZone(identifier: "Europe/Warsaw")!)
         // Clocks go back at 03:00 CEST on 25 Oct 2026 (01:00 UTC).

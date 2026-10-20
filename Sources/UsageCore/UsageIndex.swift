@@ -298,6 +298,12 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                 if counted.insert(key).inserted { data.messageBuckets[bucket, default: 0] += 1 }
             }
         }
+        var positionsByKey: [UInt64: [Int]] = [:]
+        for (position, record) in sessions.enumerated() {
+            for key in record.messages.keys where holders[key, default: 0] > 1 {
+                positionsByKey[key, default: []].append(position)
+            }
+        }
 
         // Sessions: a transcript whose every message also lives in a larger transcript (or an
         // identical one listed earlier) is a copy, such as the original of a continued session or an
@@ -305,7 +311,8 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         func isCopy(_ position: Int) -> Bool {
             let messages = sessions[position].messages
             guard let probe = messages.keys.first, messages.keys.allSatisfy({ holders[$0, default: 0] > 1 }) else { return false }
-            for (other, candidate) in sessions.enumerated() where other != position && candidate.messages[probe] != nil {
+            for other in positionsByKey[probe] ?? [] where other != position {
+                let candidate = sessions[other]
                 let larger = candidate.messages.count > messages.count || (candidate.messages.count == messages.count && other < position)
                 if larger, messages.keys.allSatisfy({ candidate.messages[$0] != nil }) { return true }
             }
