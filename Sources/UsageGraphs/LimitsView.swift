@@ -22,9 +22,9 @@ struct LimitsView: View {
                     .module()
             } else {
                 // The cards scroll once they'd make the panel taller than the screen allows.
-                // Percentages need a narrow column; dollar and request counts (`$1.2K/$2.5K`) a wider
-                // one. Every card takes the same, so the bars line up from card to card.
-                let usedWidth: CGFloat = accounts.contains { $0.meters.contains { $0.unit != .percent } } ? 76 : 40
+                // Percentages need a narrow column; dollar and request counts a wider one, as wide as
+                // `$12.4K/$25K`. Every card takes the same, so the bars line up from card to card.
+                let usedWidth: CGFloat = accounts.contains { $0.meters.contains { $0.unit != .percent } } ? 88 : 40
                 // Room for the cards below the pickers and the spend tiles, and above the footer.
                 CappedScrollView(maxHeight: state.listCap(leaving: 300, atLeast: 260), fadesEdges: false) {
                     VStack(spacing: Theme.Layout.spacing) {
@@ -189,6 +189,9 @@ private struct MeterRow: View {
                     .frame(height: 6)
                 Text(LimitText.used(meter))
                     .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                    // One line in a row 20 points high: a longer amount shrinks a little rather than wrapping.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                     .contentTransition(.numericText(countsDown: true))
                     .animation(Theme.Motion.roll, value: LimitText.used(meter))
                     .frame(width: usedWidth, alignment: .trailing)
