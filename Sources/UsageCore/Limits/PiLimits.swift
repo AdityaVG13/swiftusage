@@ -1,8 +1,8 @@
 import Foundation
 
 /// Pi runs on the subscriptions it's signed in to, so its limits are theirs: the Claude, ChatGPT and xAI
-/// logins in Pi's `auth.json` (`$PI_CODING_AGENT_DIR` or `~/.pi/agent`). A subscription that another tool
-/// is signed in to as well shows once, on that tool's card, marked as shared with Pi.
+/// logins in Pi's `auth.json` (`~/.pi/agent`, and `$PI_CODING_AGENT_DIR` now or before). A subscription
+/// that another tool is signed in to as well shows once, on that tool's card, marked as shared with Pi.
 public struct PiLimits: LimitsSource {
     public let provider = Provider.pi
     private static let renew = "Run `pi` to renew it."
@@ -21,13 +21,22 @@ public struct PiLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
-        let folder = URL.environment("PI_CODING_AGENT_DIR") ?? .home.appendingPathComponent(".pi/agent")
-        guard let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")) else { return [] }
         var results: [AccountLimits] = []
-        for login in Self.logins(auth) {
-            results.append(await limits(login))
+        for folder in Self.folders() {
+            guard let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")) else { continue }
+            for login in Self.logins(auth) {
+                results.append(await limits(login))
+            }
         }
         return results
+    }
+
+    /// The folders `PI_CODING_AGENT_DIR` names now or has named before, then Pi's own, which it uses
+    /// whenever that isn't set.
+    static func folders(home: URL = .home, configured: [String] = EnvironmentFolders.seen("PI_CODING_AGENT_DIR")) -> [URL] {
+        let folders = configured.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } + [home.appendingPathComponent(".pi/agent")]
+        var seen: Set<String> = []
+        return folders.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
     private func limits(_ login: Login) async -> AccountLimits {

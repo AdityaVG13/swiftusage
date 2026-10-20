@@ -6,6 +6,7 @@ import UsageCore
 struct LimitsView: View {
     let provider: Provider?
     @Environment(LimitsStore.self) private var limits
+    @Environment(PanelState.self) private var state
     @Environment(UsageStore.self) private var store
 
     var body: some View {
@@ -24,7 +25,8 @@ struct LimitsView: View {
                 // Percentages need a narrow column; dollar and request counts (`$1.2K/$2.5K`) a wider
                 // one. Every card takes the same, so the bars line up from card to card.
                 let usedWidth: CGFloat = accounts.contains { $0.meters.contains { $0.unit != .percent } } ? 76 : 40
-                CappedScrollView(maxHeight: Self.maxCardsHeight, fadesEdges: false) {
+                // Room for the cards below the pickers and the spend tiles, and above the footer.
+                CappedScrollView(maxHeight: state.listCap(leaving: 300, atLeast: 260), fadesEdges: false) {
                     VStack(spacing: Theme.Layout.spacing) {
                         ForEach(accounts) { AccountCard(account: $0, usedWidth: usedWidth) }
                     }
@@ -55,11 +57,6 @@ struct LimitsView: View {
         case .pi: return "Pi isn't signed in to a Claude, ChatGPT or Grok subscription."
         default: return "\(provider.name) isn't signed in on this Mac."
         }
-    }
-
-    /// Room for the cards below the menu bar, the pickers, the spend tiles and the footer.
-    private static var maxCardsHeight: CGFloat {
-        max(260, (NSScreen.main?.visibleFrame.height ?? 900) - 300)
     }
 }
 

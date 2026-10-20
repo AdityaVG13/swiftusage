@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// zstd decompression through a libzstd found at run time (Homebrew or MacPorts), since macOS ships
 /// none. Without one, compressed transcripts are skipped.
@@ -27,7 +28,22 @@ enum Zstd {
         var isError: IsError
     }
 
-    private static let library: Library? = {
+    /// The library once found. Until then it's looked for again at most once a minute, so installing
+    /// zstd takes effect without relaunching the app.
+    private static let loader = Mutex<(library: Library?, lastTry: TimeInterval)>((nil, -.infinity))
+
+    private static var library: Library? {
+        loader.withLock { state in
+            let now = ProcessInfo.processInfo.systemUptime
+            if state.library == nil, now - state.lastTry >= 60 {
+                state.lastTry = now
+                state.library = load()
+            }
+            return state.library
+        }
+    }
+
+    private static func load() -> Library? {
         let candidates = ["/opt/homebrew/lib/libzstd.1.dylib", "/usr/local/lib/libzstd.1.dylib", "/opt/local/lib/libzstd.1.dylib"]
         for path in candidates {
             guard let handle = dlopen(path, RTLD_NOW | RTLD_LOCAL) else { continue }
@@ -38,7 +54,7 @@ enum Zstd {
                            decompress: unsafeBitCast(decompress, to: Decompress.self), isError: unsafeBitCast(isError, to: IsError.self))
         }
         return nil
-    }()
+    }
 
     static var isAvailable: Bool { library != nil }
 

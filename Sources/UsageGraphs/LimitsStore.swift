@@ -31,6 +31,8 @@ final class LimitsStore {
     @ObservationIgnored private var inFlight: Task<Void, Never>?
     /// The providers the last reading asked.
     @ObservationIgnored private var asked: Set<Provider> = []
+    /// When each account the readings stopped finding was first missed.
+    @ObservationIgnored private var missingSince: [String: Date] = [:]
     @ObservationIgnored private let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("dev.tasteskill.UsageGraphs/limits.json")
 
@@ -45,6 +47,7 @@ final class LimitsStore {
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
+        timer?.tolerance = 30
     }
 
     /// An account shows under its own provider and any tool that shares it.
@@ -139,10 +142,6 @@ final class LimitsStore {
         }
     }
 
-    private static func name(_ account: AccountLimits) -> String {
-        account.provider.rawValue + "|" + (account.account ?? "")
-    }
-
     static func pin(_ account: AccountLimits, _ meter: LimitMeter) -> String {
         account.id + "/" + meter.id
     }
@@ -167,24 +166,7 @@ final class LimitsStore {
         let shown = Set(preferences.shownProviders)
         asked = shown
         let fresh = await LimitsSources.fetch(sources.filter { shown.contains($0.provider) })
-        let previous = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        let found = Set(fresh.map(\.id))
-        // Accounts of providers that are off weren't asked for; they wait as they were, out of sight.
-        let resting = accounts.filter { !found.contains($0.id) && !shown.contains($0.provider) }
-        // A login that can't be found this time (a file mid-write, a locked database) keeps its card for a
-        // day before it's taken as signed out. One whose account turned up under a new ID, after an update
-        // changed how logins are told apart, is that account and goes at once.
-        let names = Set(fresh.map(Self.name))
-        let missing = accounts.filter {
-            !found.contains($0.id) && shown.contains($0.provider) && !names.contains(Self.name($0))
-                && $0.hasValues && Date().timeIntervalSince($0.updated) < 86_400
-        }.map { account in
-            var account = account
-            account.problem = "Couldn't find this login. Sign in again if you signed out."
-            return account
-        }
-        let merged = (fresh.map { $0.keepingValues(of: previous[$0.id]) } + missing + resting)
-            .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
+        let merged = LimitsSources.update(accounts, with: fresh, asked: shown, missingSince: &missingSince)
         if merged != accounts {
             withAnimation(Theme.Motion.data) { accounts = merged }
         }

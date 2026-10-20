@@ -72,7 +72,10 @@ public struct CursorLimits: LimitsSource {
         if let model = requests?["gpt-4"] as? [String: Any], let allowance = JSONValue.number(model["maxRequestUsage"]), allowance > 0 {
             let used = max(JSONValue.number(model["numRequests"]) ?? 0, JSONValue.number(model["numRequestsTotal"]) ?? 0)
             let monthStart = JSONValue.date(requests?["startOfMonth"])
-            let reset = monthStart.flatMap { Calendar.current.date(byAdding: .month, value: 1, to: $0) } ?? end
+            // Cursor's months are Gregorian, whatever calendar this Mac uses.
+            var gregorian = Calendar(identifier: .gregorian)
+            gregorian.timeZone = .gmt
+            let reset = monthStart.flatMap { gregorian.date(byAdding: .month, value: 1, to: $0) } ?? end
             result.meters.append(LimitMeter(id: "requests", label: "Requests", used: used, limit: allowance, unit: .count, resetsAt: reset, period: period))
         }
         let budgets = [summary?[path: "individualUsage", "onDemand"], summary?[path: "teamUsage", "onDemand"]].compactMap { $0 as? [String: Any] }

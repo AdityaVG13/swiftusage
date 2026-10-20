@@ -14,6 +14,9 @@ public actor CursorSource: UsageSource {
     public nonisolated let ideStateURL: URL
     private var chats: [String: Chat] = [:]
     private var ide = Chat(id: "ide")
+    /// The IDE's database is read whole, so while Cursor keeps writing to it, it's read at most once a
+    /// minute; the next refresh after that picks up the rest.
+    private var ideReadAt: Date?
 
     public init(chatsURL: URL = URL.home.appendingPathComponent(".cursor/chats"),
                 ideStateURL: URL = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")) {
@@ -33,9 +36,12 @@ public actor CursorSource: UsageSource {
             chat.stamp = stamp
             chats[path] = chat
         }
-        if let stamp = DatabaseStamp(path: ideStateURL.path), ide.stamp != stamp, let reader = SQLiteReader(path: ideStateURL.path) {
+        if let stamp = DatabaseStamp(path: ideStateURL.path), ide.stamp != stamp,
+           ideReadAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,
+           let reader = SQLiteReader(path: ideStateURL.path) {
             ide = Chat.readIDE(reader)
             ide.stamp = stamp
+            ideReadAt = Date()
         }
         return aggregate()
     }
@@ -43,6 +49,7 @@ public actor CursorSource: UsageSource {
     public func rebuild(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
         chats = [:]
         ide = Chat(id: "ide")
+        ideReadAt = nil
         return await refresh(progress: progress)
     }
 
@@ -102,10 +109,11 @@ public actor CursorSource: UsageSource {
             var chat = Chat(id: "ide")
             guard db.hasTable("cursorDiskKV") else { return chat }
             var composers: [String: (start: Double, model: String?)] = [:]
+            // Key ranges rather than LIKE, which can't use the key's index and would scan the whole table.
             db.rows("""
                 SELECT key, json_extract(CAST(value AS TEXT), '$.createdAt'), json_extract(CAST(value AS TEXT), '$.modelConfig.modelName'),
                        json_array_length(json_extract(CAST(value AS TEXT), '$.fullConversationHeadersOnly'))
-                FROM cursorDiskKV WHERE key LIKE 'composerData:%' AND json_valid(CAST(value AS TEXT))
+                FROM cursorDiskKV WHERE key >= 'composerData:' AND key < 'composerData;' AND json_valid(CAST(value AS TEXT))
                 """) { row in
                 guard let key = row.text(0), let start = Self.time(row, 1), row.int(3) > 0 else { return }
                 composers[String(key.dropFirst("composerData:".count))] = (start, row.text(2))
@@ -115,7 +123,7 @@ public actor CursorSource: UsageSource {
                 SELECT key, json_extract(CAST(value AS TEXT), '$.type'), json_extract(CAST(value AS TEXT), '$.createdAt'),
                        json_extract(CAST(value AS TEXT), '$.tokenCount.inputTokens'), json_extract(CAST(value AS TEXT), '$.tokenCount.outputTokens'),
                        json_extract(CAST(value AS TEXT), '$.modelInfo.modelName')
-                FROM cursorDiskKV WHERE key LIKE 'bubbleId:%' AND json_valid(CAST(value AS TEXT))
+                FROM cursorDiskKV WHERE key >= 'bubbleId:' AND key < 'bubbleId;' AND json_valid(CAST(value AS TEXT))
                 """) { row in
                 // bubbleId:<composer>:<bubble>; type 1 is the user, 2 the assistant.
                 guard let key = row.text(0), row.int(1) == 1 || row.int(1) == 2 else { return }

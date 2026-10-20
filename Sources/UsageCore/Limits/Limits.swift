@@ -193,6 +193,48 @@ public enum LimitsSources {
             .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
     }
 
+    /// The cards after a reading of the `asked` providers: what it found, keeping the last good values of a
+    /// login that failed, then what it didn't find.
+    ///
+    /// A login that can't be found this time (a file mid-write, a locked keychain after waking) keeps its
+    /// card as it was, says so once it's been out of sight for a while, and after a day is taken as signed
+    /// out. One whose account turned up under a new ID, after an update changed how logins are told apart,
+    /// is that account and goes at once: the only card of its name before and after, now under an ID no
+    /// card had. Several accounts sharing a name, such as "Personal", never stand in for each other.
+    /// Accounts of providers that weren't asked wait as they were.
+    public static func update(_ accounts: [AccountLimits], with fresh: [AccountLimits], asked: Set<Provider>,
+                              missingSince: inout [String: Date], now: Date = Date()) -> [AccountLimits] {
+        let previous = Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let found = Set(fresh.map(\.id))
+        func name(_ account: AccountLimits) -> String { account.provider.rawValue + "|" + (account.account ?? "") }
+        let before = Dictionary(grouping: accounts, by: name), after = Dictionary(grouping: fresh, by: name)
+        func renamed(_ account: AccountLimits) -> Bool {
+            guard before[name(account)]?.count == 1, let match = after[name(account)], match.count == 1 else { return false }
+            return previous[match[0].id] == nil
+        }
+        var missing: [AccountLimits] = []
+        var resting: [AccountLimits] = []
+        for account in accounts where !found.contains(account.id) {
+            guard asked.contains(account.provider) else {
+                resting.append(account)
+                continue
+            }
+            guard !renamed(account), account.hasValues, now.timeIntervalSince(account.updated) < .day else { continue }
+            let since = missingSince[account.id] ?? now
+            var account = account
+            if now.timeIntervalSince(since) >= missingGrace {
+                account.problem = "Couldn't find this login. Sign in again if you signed out."
+            }
+            missing.append(account)
+        }
+        missingSince = Dictionary(uniqueKeysWithValues: missing.map { ($0.id, missingSince[$0.id] ?? now) })
+        return (fresh.map { $0.keepingValues(of: previous[$0.id], now: now) } + missing + resting)
+            .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
+    }
+
+    /// How long a login can go unfound before its card says so: three readings.
+    static let missingGrace: TimeInterval = 15 * 60
+
     /// One card per account id: the first reading wins, unless only a later one could be read.
     static func merged(_ accounts: [AccountLimits]) -> [AccountLimits] {
         var result: [AccountLimits] = []

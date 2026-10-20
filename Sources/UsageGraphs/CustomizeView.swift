@@ -45,12 +45,6 @@ struct CustomizeView: View {
     }
 }
 
-/// Room for a scrolling list below the menu bar and whatever is above it in the panel.
-@MainActor
-private func listCap(leaving taken: CGFloat) -> CGFloat {
-    max(180, (NSScreen.main?.visibleFrame.height ?? 900) - taken)
-}
-
 // MARK: - Providers
 
 /// A tile for each provider, then every signed-in account of the providers that are on.
@@ -58,6 +52,7 @@ private struct ProvidersPage: View {
     @Environment(UsageStore.self) private var store
     @Environment(LimitsStore.self) private var limits
     @Environment(Preferences.self) private var preferences
+    @Environment(PanelState.self) private var state
     /// Counts refused attempts to turn off the last provider, which shakes its tile.
     @State private var refused: [Provider: Int] = [:]
 
@@ -102,7 +97,7 @@ private struct ProvidersPage: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                CappedScrollView(maxHeight: listCap(leaving: 520)) {
+                CappedScrollView(maxHeight: state.listCap(leaving: 520)) {
                     VStack(spacing: 2) {
                         ForEach(accounts) { account in
                             let isOn = limits.isShown(account)
@@ -192,6 +187,7 @@ private struct AccountRow: View {
 private struct MenuBarPage: View {
     @Environment(UsageStore.self) private var store
     @Environment(LimitsStore.self) private var limits
+    @Environment(PanelState.self) private var state
     @AppStorage("showTokensInMenuBar") private var showTokens = true
     @AppStorage("showCostInMenuBar") private var showCost = false
     @AppStorage("menuBarShowsLeft") private var showsLeft = false
@@ -240,7 +236,7 @@ private struct MenuBarPage: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 24)
             } else {
-                CappedScrollView(maxHeight: listCap(leaving: 400)) {
+                CappedScrollView(maxHeight: state.listCap(leaving: 400)) {
                     VStack(alignment: .leading, spacing: 16) {
                         ForEach(accounts) { account in
                             VStack(alignment: .leading, spacing: 8) {
@@ -342,7 +338,7 @@ private struct MenuBarPreview: View {
 }
 
 /// The menu bar item as `MenuBarStrip` draws it, in SwiftUI so its parts can animate, a little larger.
-/// Each account's logo and numbers lift when dragged; the others step aside as it passes their middles,
+/// Each account's logo and numbers lift when dragged; the others step aside as its edge passes their middles,
 /// and it settles into the gap when dropped.
 private struct MenuBarReplica: View {
     let content: MenuBarContent
@@ -448,16 +444,18 @@ private struct MenuBarReplica: View {
             }
     }
 
-    /// An account dragged this far, kept within the strip, and the place it would drop into: after every
-    /// other account whose middle its own has passed.
+    /// An account dragged this far, kept within the strip, and the place it would drop into: past every
+    /// account whose middle its leading edge (going left) or trailing edge (going right) has crossed, so
+    /// pushing it against either end of the strip always reaches that end, whatever the widths.
     private func dragged(_ id: String, by translation: CGFloat, in ids: [String]) -> Drag? {
         guard let from = ids.firstIndex(of: id) else { return nil }
         // Where each account starts, then where the last one ends.
         let edges = ids.reduce(into: [CGFloat(0)]) { edges, id in edges.append(edges[edges.count - 1] + (widths[id] ?? 0)) }
         let offset = min(max(translation, -edges[from]), edges[ids.count] - edges[from + 1])
         let middle = { (index: Int) in (edges[index] + edges[index + 1]) / 2 }
-        let target = ids.indices.filter { $0 != from && middle($0) < middle(from) + offset }.count
-        return Drag(id: id, offset: offset, target: target)
+        let before = ids.indices.prefix(from).filter { middle($0) < edges[from] + offset }.count
+        let after = ids.indices.suffix(from: from + 1).filter { middle($0) < edges[from + 1] + offset }.count
+        return Drag(id: id, offset: offset, target: before + after)
     }
 
     /// How far an account steps aside for the one being dragged: that one's width, toward the place it left.

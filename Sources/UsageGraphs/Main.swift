@@ -7,6 +7,14 @@ enum Main {
     @MainActor
     static func main() {
         let arguments = CommandLine.arguments
+        if arguments.contains("--version") {
+            print("SwiftUsage \(AboutPanel.version)")
+            return
+        }
+        if arguments.contains("--help") || arguments.contains("-h") {
+            print(help, terminator: "")
+            return
+        }
         if let i = arguments.firstIndex(of: "--replay"), arguments.count > i + 3 {
             Replay.run(source: arguments[i + 1], work: arguments[i + 2], output: arguments[i + 3])
             return
@@ -33,6 +41,19 @@ enum Main {
         }
         UsageGraphsApp.main()
     }
+
+    static let help = """
+        SwiftUsage \(AboutPanel.version): coding agent usage, limits and costs, in your menu bar.
+
+        With no options it runs the menu bar app. In a terminal:
+
+          swiftusage --limits [--provider <id>] [--json]   every signed-in account's plan limits
+          swiftusage --dump [--provider <id>] [--cold]     the numbers the panel shows, per provider
+          swiftusage --version                             the version
+
+        Providers: \(Provider.allCases.map(\.rawValue).joined(separator: ", "))
+
+        """
 }
 
 /// `swiftusage --dump [--provider <id>] [--cold]` prints the numbers the panel would show, for checking

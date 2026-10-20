@@ -1,9 +1,9 @@
 import Foundation
 
 /// Claude's session, weekly and per-model limits, for every Claude Code login on this Mac: the default
-/// config folder (`~/.claude`, or `$CLAUDE_CONFIG_DIR`) and any other `~/.claude*` folder used as one,
-/// such as `~/.claude_personal` for a second account, then Claude Desktop's login for an account none of
-/// them has.
+/// config folder (`~/.claude`), every folder `$CLAUDE_CONFIG_DIR` has named, and any other `~/.claude*` or
+/// `~/.config/claude*` folder used as one, such as `~/.claude_personal` for a second account, then Claude
+/// Desktop's login for an account none of them has.
 ///
 /// Claude Code keeps each folder's login in the keychain as `Claude Code-credentials`, with
 /// `-<first 8 hex digits of SHA-256(folder)>` appended for folders set through `CLAUDE_CONFIG_DIR`, or in
@@ -31,7 +31,7 @@ public struct ClaudeLimits: LimitsSource {
     public func fetch() async -> [AccountLimits] {
         var results: [AccountLimits] = []
         var seen: Set<String> = []
-        let logins = Self.logins()
+        let logins = Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR"))
         for login in logins where seen.insert(login.id).inserted {
             results.append(await Self.limits(for: login))
         }
@@ -117,30 +117,37 @@ public struct ClaudeLimits: LimitsSource {
 
     // MARK: - Finding the logins
 
-    static func logins(home: URL = .home, environment: [String: String] = ProcessInfo.processInfo.environment,
+    /// `remembered` are folders `CLAUDE_CONFIG_DIR` named before, as written, read even when it isn't set now.
+    static func logins(home: URL = .home, environment: [String: String] = ProcessInfo.processInfo.environment, remembered: [String] = [],
                        keychain: (_ service: String, _ account: String?) -> String? = Keychain.password) -> [Login] {
-        var folders: [(url: URL, isDefault: Bool, service: [String])] = []
+        var folders: [(url: URL, identity: URL, isDefault: Bool, service: [String])] = []
         let user = environment["USER"] ?? NSUserName()
-        if let custom = environment["CLAUDE_CONFIG_DIR"], !custom.isEmpty {
-            folders.append((URL(fileURLWithPath: (custom as NSString).expandingTildeInPath), true, ["Claude Code-credentials-" + custom.sha256Prefix]))
-        } else {
-            folders.append((home.appendingPathComponent(".claude"), true, ["Claude Code-credentials"]))
-        }
-        // Other config folders, named after the default one.
-        let names = (try? FileManager.default.contentsOfDirectory(atPath: home.path)) ?? []
-        for name in names.sorted() where name.hasPrefix(".claude") && name != ".claude" && name != ".claude.json" {
-            let url = home.appendingPathComponent(name)
-            guard FileManager.default.fileExists(atPath: url.appendingPathComponent(".claude.json").path),
-                  !folders.contains(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) else { continue }
+        let custom = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
+        func add(_ written: String, isDefault: Bool = false) {
+            let url = URL(fileURLWithPath: (written as NSString).expandingTildeInPath)
+            let identity = url.appendingPathComponent(".claude.json")
+            guard !folders.contains(where: { $0.identity.standardizedFileURL == identity.standardizedFileURL }) else { return }
             // `CLAUDE_CONFIG_DIR` is hashed as written, which is usually the expanded path.
-            let spellings = [url.path, "~/" + name, url.path + "/"]
-            folders.append((url, false, spellings.map { "Claude Code-credentials-" + $0.sha256Prefix }))
+            var spellings = [written, url.path, url.path + "/"]
+            if url.path.hasPrefix(home.path + "/") { spellings.append("~" + url.path.dropFirst(home.path.count)) }
+            var unique: Set<String> = []
+            folders.append((url, identity, isDefault, spellings.filter { unique.insert($0).inserted }.map { "Claude Code-credentials-" + $0.sha256Prefix }))
+        }
+        if let custom { add(custom, isDefault: true) }
+        // `claude` run without `CLAUDE_CONFIG_DIR` keeps its login here, whether or not the app was started with it.
+        folders.append((home.appendingPathComponent(".claude"), home.appendingPathComponent(".claude.json"), custom == nil, ["Claude Code-credentials"]))
+        remembered.forEach { add($0) }
+        // Other config folders, named after the default one.
+        for (parent, prefix) in [(home, ".claude"), (home.appendingPathComponent(".config"), "claude")] {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: parent.path)) ?? []
+            for name in names.sorted() where name.hasPrefix(prefix) && name != ".claude" {
+                let url = parent.appendingPathComponent(name)
+                if FileManager.default.fileExists(atPath: url.appendingPathComponent(".claude.json").path) { add(url.path) }
+            }
         }
 
         return folders.compactMap { folder in
-            let identity = folder.isDefault && environment["CLAUDE_CONFIG_DIR"] == nil
-                ? home.appendingPathComponent(".claude.json") : folder.url.appendingPathComponent(".claude.json")
-            guard let account = JSONValue.object(file: identity)?["oauthAccount"] as? [String: Any],
+            guard let account = JSONValue.object(file: folder.identity)?["oauthAccount"] as? [String: Any],
                   let accountID = account["accountUuid"] as? String else { return nil }
             func oauth(_ reading: String?) -> [String: Any]? {
                 JSONValue.object(reading.map { Data($0.utf8) })?["claudeAiOauth"] as? [String: Any]
@@ -341,7 +348,7 @@ struct ResetGrants: Sendable, Equatable {
         for entry in block["grants"] as? [Any] ?? [] {
             guard let grant = entry as? [String: Any], let id = grant["id"] as? String, !id.isEmpty,
                   let left = JSONValue.number(grant["resets_left"]) else { return nil }
-            grants.append(Grant(id: id, left: max(Int(left), 0), ends: JSONValue.date(grant["ends_at"]), clears: grant["clears"] as? [String] ?? []))
+            grants.append(Grant(id: id, left: max(Int(saturating: left), 0), ends: JSONValue.date(grant["ends_at"]), clears: grant["clears"] as? [String] ?? []))
         }
         eligible = block["eligible"] as? Bool == true
         self.grants = grants

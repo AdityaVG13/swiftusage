@@ -2,9 +2,11 @@ import CoreServices
 import Foundation
 
 /// Calls `onChange` (coalesced by `latency`) with the changed paths whenever anything under `paths`
-/// changes.
+/// changes. Changed paths read as under the watched path they're in, even when it runs through a symlink.
 final class DirectoryWatcher: @unchecked Sendable {
     private let paths: [String]
+    /// Each watched path and where its symlinks lead, which is where FSEvents reports changes.
+    private let resolved: [(path: String, real: String)]
     private let latency: TimeInterval
     private let onChange: @Sendable ([String]) -> Void
     private let queue = DispatchQueue(label: "UsageGraphs.DirectoryWatcher")
@@ -12,6 +14,11 @@ final class DirectoryWatcher: @unchecked Sendable {
 
     init(paths: [String], latency: TimeInterval = 5, onChange: @escaping @Sendable ([String]) -> Void) {
         self.paths = paths
+        resolved = paths.map { path in
+            guard let real = realpath(path, nil) else { return (path, path) }
+            defer { free(real) }
+            return (path, String(cString: real))
+        }
         self.latency = latency
         self.onChange = onChange
     }
@@ -28,7 +35,8 @@ final class DirectoryWatcher: @unchecked Sendable {
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, _ in
             guard let info else { return }
             let changed = (Unmanaged<CFArray>.fromOpaque(eventPaths).takeUnretainedValue() as? [String]) ?? []
-            Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue().onChange(Array(changed.prefix(count)))
+            let watcher = Unmanaged<DirectoryWatcher>.fromOpaque(info).takeUnretainedValue()
+            watcher.onChange(changed.prefix(count).map(watcher.watched))
         }
         guard let stream = FSEventStreamCreate(
             nil,
@@ -42,6 +50,14 @@ final class DirectoryWatcher: @unchecked Sendable {
         FSEventStreamSetDispatchQueue(stream, queue)
         FSEventStreamStart(stream)
         self.stream = stream
+    }
+
+    /// A changed path as it reads under the watched path it's in.
+    private func watched(_ path: String) -> String {
+        for (given, real) in resolved where given != real && path.hasPrefix(real) {
+            return given + path.dropFirst(real.count)
+        }
+        return path
     }
 
     func stop() {

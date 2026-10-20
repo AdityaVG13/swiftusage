@@ -26,9 +26,7 @@ struct StatTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            // Four tiles share a row, so a long label shrinks a little rather than being cut off.
             CardTitle(label, systemImage: systemImage)
-                .minimumScaleFactor(0.8)
             MorphingText(value)
                 .font(.system(size: 23, weight: .semibold, design: .rounded))
                 .monospacedDigit()
@@ -149,10 +147,13 @@ private struct Morph: ViewModifier, Animatable {
     }
 
     func body(content: Content) -> some View {
+        // A spring carries progress a little past either end. Only the scale follows it there, so a
+        // character arriving pops past full size rather than dimming or blurring again.
+        let faded = min(max(progress, 0), 1)
         content
-            .blur(radius: 4 * progress)
+            .blur(radius: 4 * faded)
             .scaleEffect(1 - 0.15 * progress)
-            .opacity(1 - progress * progress)
+            .opacity(1 - faded * faded)
     }
 }
 
@@ -265,7 +266,7 @@ struct PressScale: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? scale : 1)
-            .animation(.spring(duration: 0.3, bounce: 0.4), value: configuration.isPressed)
+            .animation(Theme.Motion.press, value: configuration.isPressed)
     }
 }
 

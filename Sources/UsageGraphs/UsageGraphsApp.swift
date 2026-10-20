@@ -7,11 +7,28 @@ enum UsageGraphsApp {
 
     static func main() {
         let app = NSApplication.shared
+        takeOverFromOtherCopies()
         app.delegate = delegate
         // Also covers running the bare binary during development, outside the LSUIElement bundle.
         app.setActivationPolicy(.accessory)
         app.mainMenu = mainMenu()
         app.run()
+    }
+
+    /// The copy opened last takes over from any other that's running: a newer version dragged over the
+    /// old one, or the one in Applications after one run from the disk image. Two would put two items in
+    /// the menu bar and read every transcript twice.
+    private static func takeOverFromOtherCopies() {
+        guard let id = Bundle.main.bundleIdentifier else { return }
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        guard !others.isEmpty else { return }
+        others.forEach { $0.terminate() }
+        // They save their indexes as they quit; waiting keeps two copies from writing the same files.
+        let deadline = Date().addingTimeInterval(5)
+        while others.contains(where: { !$0.isTerminated }), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
     }
 
     /// Never shown, since the app has no Dock icon, but it gives ⌘Q to the panel.
@@ -26,12 +43,58 @@ enum UsageGraphsApp {
     }
 }
 
+/// The standard About panel: the icon, the version, build and copyright from the bundle, where to follow
+/// the app on X, and credit for the price lists (THIRD-PARTY-NOTICES.md has their licenses).
+@MainActor
+enum AboutPanel {
+    /// `1.0.0 (12)`, or `development build` for the bare binary, which has no bundle around it.
+    nonisolated static var version: String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        guard let short = info["CFBundleShortVersionString"] as? String else { return "development build" }
+        return (info["CFBundleVersion"] as? String).map { "\(short) (\($0))" } ?? short
+    }
+
+    static func show() {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        let small: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize), .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+        let credits = NSMutableAttributedString(string: "Made by ", attributes: small)
+        var link = small
+        link[.link] = URL(string: "https://x.com/blueemi99")!
+        credits.append(NSAttributedString(string: "@blueemi99", attributes: link))
+        credits.append(NSAttributedString(string: ". Follow along on X for updates.\n\n", attributes: small))
+        var quiet = small
+        quiet[.foregroundColor] = NSColor.secondaryLabelColor
+        credits.append(NSAttributedString(
+            string: "Prices from LiteLLM and OpenUsage, both under the MIT License. Provider names and logos belong to their owners.",
+            attributes: quiet))
+        // The app has no Dock icon, so it comes forward first or the panel opens behind the app in front.
+        NSApp.activate()
+        NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let preferences = Preferences()
         menuBar = MenuBarController(store: UsageStore(preferences: preferences), limits: LimitsStore(preferences: preferences), preferences: preferences)
+        // The first time, the panel opens by itself, under the item it's found at from then on, once the
+        // menu bar has placed the item.
+        if !UserDefaults.standard.bool(forKey: "hasOpened") {
+            UserDefaults.standard.set(true, forKey: "hasOpened")
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(600))
+                self?.menuBar?.show()
+            }
+        }
+    }
+
+    /// Opening the app while it runs, from Finder, Spotlight or Launchpad, opens the panel.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        menuBar?.show()
+        return false
     }
 }
 
@@ -177,28 +240,25 @@ enum MenuBarStrip {
     }
 }
 
-/// The SwiftUsage mark, drawn as a template image: a 3×3 grid of heatmap cells whose filled ones rise
-/// like a bar chart (see `brand/`). The menu bar shows it only when it has nothing else to show, so the
-/// item is still there to click.
+/// The SwiftUsage mark, drawn as a template image: a tilde, one round-capped stroke (see `brand/`). The
+/// menu bar shows it only when it has nothing else to show, so the item is still there to click.
 enum MenuBarIcon {
     static let image: NSImage = {
         let size = NSSize(width: 16, height: 16)
         let image = NSImage(size: size, flipped: true) { _ in
-            let filled = [false, false, true,
-                          false, true, true,
-                          true, true, true]
-            // The mark's 32:12 cells and gaps, on whole pixels at 2x. Empty cells are a little stronger
-            // than the logo's 18% so they still show at this size.
-            let cell: CGFloat = 4
-            let gap: CGFloat = 1.5
-            let origin = (16 - (cell * 3 + gap * 2)) / 2
-            for row in 0..<3 {
-                for column in 0..<3 {
-                    let rect = NSRect(x: origin + CGFloat(column) * (cell + gap), y: origin + CGFloat(row) * (cell + gap), width: cell, height: cell)
-                    NSColor.black.withAlphaComponent(filled[row * 3 + column] ? 1 : 0.25).setFill()
-                    NSBezierPath(roundedRect: rect, xRadius: 0.8, yRadius: 0.8).fill()
-                }
-            }
+            // The mark's 120 grid, its caps reaching the sides. The stroke is a little lighter than the
+            // logo's so it sits with the menu bar's other icons.
+            let width: CGFloat = 2.6
+            let unit = (16 - width) / 96
+            func point(_ x: CGFloat, _ y: CGFloat) -> NSPoint { NSPoint(x: 8 + (x - 60) * unit, y: 8 + (y - 60) * unit) }
+            let tilde = NSBezierPath()
+            tilde.move(to: point(12, 74))
+            tilde.curve(to: point(60, 60), controlPoint1: point(24, 36), controlPoint2: point(52, 36))
+            tilde.curve(to: point(108, 46), controlPoint1: point(68, 84), controlPoint2: point(96, 84))
+            tilde.lineWidth = width
+            tilde.lineCapStyle = .round
+            NSColor.black.setStroke()
+            tilde.stroke()
             return true
         }
         image.isTemplate = true

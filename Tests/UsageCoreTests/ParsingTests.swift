@@ -25,6 +25,26 @@ struct ParsingTests {
         #expect(parsed.timestamp == Double(Timestamp.daysFromCivil(year: 2026, month: 1, day: 2)) * 86_400 + 3 * 3600 + 4 * 60 + 5)
     }
 
+    @Test func corruptCountsCantOverflow() throws {
+        let line = #"{"type":"assistant","message":{"model":"m","id":"msg_9","usage":{"input_tokens":9223372036854775807,"output_tokens":-9223372036854775808,"cache_read_input_tokens":99999999999999999999999,"cache_creation_input_tokens":5}}}"#
+        let usage = try #require(TranscriptLine.parse(line)?.usage)
+        #expect(usage.input == 1_000_000_000_000)
+        #expect(usage.output == -1_000_000_000_000)
+        #expect(usage.cacheRead == 1_000_000_000_000)
+        #expect(usage.total == 1_000_000_000_005)
+    }
+
+    @Test func serverNumbersSaturate() {
+        #expect(Int(saturating: 41.9) == 41)
+        #expect(Int(saturating: 1e300) == .max)
+        #expect(Int(saturating: -1e300) == .min)
+        #expect(Int(saturating: .nan) == 0)
+    }
+
+    @Test func missingDatabaseOpensNothing() {
+        #expect(SQLiteReader(path: "/nonexistent/swiftusage/state.vscdb") == nil)
+    }
+
     @Test func otherTypesAndMalformedLines() {
         #expect(TranscriptLine.parse(#"{"type":"file-history-snapshot","snapshot":{}}"#)?.kind == .other)
         #expect(TranscriptLine.parse(#"{"type":"assistant","message":{"content":"unterminated"#) == nil)

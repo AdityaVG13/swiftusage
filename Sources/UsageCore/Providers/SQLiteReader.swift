@@ -13,7 +13,9 @@ final class SQLiteReader {
         let escaped = path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? path
         let uri = "file:" + escaped + (walSize == 0 ? "?immutable=1" : "?mode=ro")
         guard sqlite3_open_v2(uri, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_URI | SQLITE_OPEN_NOMUTEX, nil) == SQLITE_OK else {
+            // deinit still runs for an init that fails here, so it mustn't close the handle again.
             sqlite3_close(db)
+            db = nil
             return nil
         }
         sqlite3_busy_timeout(db, 2000)

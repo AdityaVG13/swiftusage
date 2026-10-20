@@ -14,6 +14,12 @@ public struct UsageData: Sendable {
 
     public var isEmpty: Bool { sessionStarts.isEmpty && usage.isEmpty && messageBuckets.isEmpty }
 
+    /// Whether two reads found the same history, whenever each was made.
+    public func sameHistory(as other: UsageData) -> Bool {
+        transcriptCount == other.transcriptCount && sessionStarts == other.sessionStarts
+            && messageBuckets == other.messageBuckets && usage == other.usage
+    }
+
     /// Several providers' usage as one.
     public static func merged(_ parts: [UsageData]) -> UsageData {
         var data = UsageData()

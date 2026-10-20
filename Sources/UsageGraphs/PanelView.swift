@@ -231,15 +231,12 @@ struct OverviewView: View {
                 GridRow {
                     StatTile(label: "Sessions", systemImage: "terminal", value: value { Format.grouped($0.sessions) })
                     StatTile(label: "Messages", systemImage: "text.bubble", value: value { Format.grouped($0.messages) })
-                    StatTile(label: "Tokens", systemImage: "number", value: countsTokens ? value { Format.compact($0.totalTokens) } : "–")
-                    // At API rates, from the tokens in local history.
-                    StatTile(label: "Cost", systemImage: "dollarsign.circle", value: countsTokens ? value { Format.dollars($0.cost) } : "–")
+                    StatTile(label: "Total tokens", systemImage: "number", value: countsTokens ? value { Format.compact($0.totalTokens) } : "–")
                 }
                 GridRow {
                     StatTile(label: "Active days", systemImage: "calendar", value: value { Format.grouped($0.activeDays) })
                     StatTile(label: "Peak hour", systemImage: "clock", value: value { $0.peakHour.map(Format.hour) ?? "–" })
                     StatTile(label: "Favorite model", systemImage: "star", value: value { $0.favoriteModel?.name ?? "–" })
-                        .gridCellColumns(2)
                 }
             }
             graph
@@ -281,6 +278,7 @@ private struct Footer: View {
     @Environment(LimitsStore.self) private var limits
     @Environment(Preferences.self) private var preferences
     @Environment(PanelState.self) private var state
+    @Environment(PanelPresentation.self) private var presentation
     @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
     /// Reloads started here that haven't finished.
     @State private var reloading = 0
@@ -313,6 +311,7 @@ private struct Footer: View {
             }
             .buttonStyle(PressScale(scale: 0.88))
             .help("Refresh")
+            .accessibilityLabel("Refresh")
             Button {
                 customizeClicks += 1
                 customize(.providers)
@@ -327,20 +326,22 @@ private struct Footer: View {
                 Button("Customize…") { customize(.providers) }
                     .keyboardShortcut(",")
                 Button("Menu Bar…") { customize(.menuBar) }
-                Toggle("Open at Login", isOn: $launchAtLogin)
+                Toggle("Open at Login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 Toggle("Screenshot Mode", isOn: $state.screenshotMode.animation(Theme.Motion.select))
                 Divider()
                 Button("Re-read All History") {
                     reload { await store.rebuild() }
                 }
-                Menu("Show History in Finder") {
-                    ForEach(preferences.shownProviders) { provider in
-                        if let folder = store.folder(for: provider) {
+                let folders = preferences.shownProviders.compactMap { provider in store.folder(for: provider).map { (provider, $0) } }
+                if !folders.isEmpty {
+                    Menu("Show History in Finder") {
+                        ForEach(folders, id: \.0) { provider, folder in
                             Button(provider.name) { NSWorkspace.shared.open(folder) }
                         }
                     }
                 }
                 Divider()
+                Button("About SwiftUsage") { AboutPanel.show() }
                 Button("Quit SwiftUsage") {
                     NSApp.terminate(nil)
                 }
@@ -355,6 +356,7 @@ private struct Footer: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("More")
+            .accessibilityLabel("More")
             // A menu doesn't say when it opens, so its dots bounce when any menu starts tracking with the
             // pointer over them. Context menus open elsewhere, over the cards.
             .onReceive(NotificationCenter.default.publisher(for: NSMenu.didBeginTrackingNotification)) { _ in
@@ -365,18 +367,26 @@ private struct Footer: View {
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
-        .onChange(of: launchAtLogin) { _, enabled in
-            do {
-                if enabled {
-                    try SMAppService.mainApp.register()
-                } else {
-                    try SMAppService.mainApp.unregister()
-                }
-            } catch {
-                NSLog("swiftusage: login item change failed: \(error)")
-                launchAtLogin = SMAppService.mainApp.status == .enabled
-            }
+        // The login item can be turned off in System Settings too.
+        .onChange(of: presentation.isPresented) { _, presented in
+            if presented { launchAtLogin = SMAppService.mainApp.status == .enabled }
         }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            NSLog("swiftusage: login item change failed: \(error)")
+        }
+        // A login item the person once turned off in System Settings has to be allowed there again.
+        if enabled, service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        launchAtLogin = service.status == .enabled
     }
 
     private func customize(_ section: CustomizeSection) {

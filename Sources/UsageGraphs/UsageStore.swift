@@ -30,6 +30,8 @@ final class UsageStore {
     @ObservationIgnored private var prices = PriceList.bundled
     /// Counts stats builds, so one that finishes after a newer one is dropped.
     @ObservationIgnored private var generation = 0
+    /// The local day the stats were last built on; they're rebuilt on a new day even if no history changed.
+    @ObservationIgnored private var statsDay: Int?
 
     init(preferences: Preferences) {
         self.preferences = preferences
@@ -39,10 +41,7 @@ final class UsageStore {
             await refresh()
             await updatePrices()
         }
-        Task.detached(priority: .utility) {
-            let needsZstd = UsageSources.codexHasUnreadableRollouts()
-            await MainActor.run { self.codexNeedsZstd = needsZstd }
-        }
+        checkZstd()
 
         let watched: [(provider: Provider, path: String)] = sources.flatMap { source in source.watchedPaths.map { (source.provider, $0) } }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
@@ -55,10 +54,12 @@ final class UsageStore {
         // Catches day rollover, newly installed tools and anything FSEvents coalesced away.
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in
+                self?.checkZstd()
                 await self?.refresh()
                 await self?.updatePrices()
             }
         }
+        timer?.tolerance = 30
 
         // Quit, logout and shutdown all pass through here; give the indexes a moment to reach disk.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [sources] _ in
@@ -120,24 +121,42 @@ final class UsageStore {
     }
 
     func rebuild() async {
+        checkZstd()
         await scan(nil) { source, progress in await source.rebuild(progress: progress) }
+    }
+
+    /// Whether to suggest installing zstd, which is checked again until there's no need.
+    private func checkZstd() {
+        Task.detached(priority: .utility) {
+            let needsZstd = UsageSources.codexHasUnreadableRollouts()
+            await MainActor.run { if self.codexNeedsZstd != needsZstd { self.codexNeedsZstd = needsZstd } }
+        }
     }
 
     private func scan(_ providers: Set<Provider>?, _ read: @escaping @Sendable (any UsageSource, (@Sendable (ScanProgress) -> Void)?) async -> UsageData) async {
         let chosen = sources.filter { (providers?.contains($0.provider) ?? true) && preferences.isShown($0.provider) }
         if chosen.isEmpty { return }
         activeScans += 1
-        await withTaskGroup(of: (Provider, UsageData).self) { group in
+        // Agents write to their history every few seconds while they run, and most of those reads add
+        // nothing the stats show; only a read that changed some provider's history rebuilds them.
+        var changed = false
+        let previous = data
+        await withTaskGroup(of: (Provider, UsageData, Bool).self) { group in
             for source in chosen {
                 let handler = progressHandler(for: source.provider)
-                group.addTask { (source.provider, await read(source, handler)) }
+                let before = previous[source.provider]
+                group.addTask {
+                    let result = await read(source, handler)
+                    return (source.provider, result, before.map { !$0.sameHistory(as: result) } ?? true)
+                }
             }
-            for await (provider, result) in group {
+            for await (provider, result, providerChanged) in group {
                 data[provider] = result
+                if providerChanged { changed = true }
             }
         }
         activeScans -= 1
-        await apply()
+        await apply(rebuildingStats: changed)
     }
 
     private func progressHandler(for provider: Provider) -> @Sendable (ScanProgress) -> Void {
@@ -156,30 +175,12 @@ final class UsageStore {
         }
     }
 
-    private func apply() async {
+    private func apply(rebuildingStats: Bool = true) async {
         let snapshot = data
-        let shown = Set(preferences.shownProviders)
-        let current = stats
-        let prices = prices
-        generation += 1
-        let build = generation
-        // Built and compared off the main thread; unchanged numbers don't touch the views at all.
-        let built: [Provider?: [StatsRange: RangeStats]]? = await Task.detached(priority: .userInitiated) {
-            let now = Date()
-            let clock = DayClock()
-            // "All" is the providers that are on.
-            var parts: [Provider?: UsageData] = [nil: UsageData.merged(snapshot.filter { shown.contains($0.key) }.map(\.value))]
-            for (provider, data) in snapshot { parts[provider] = data }
-            var result: [Provider?: [StatsRange: RangeStats]] = [:]
-            for (provider, data) in parts {
-                for range in StatsRange.allCases {
-                    result[provider, default: [:]][range] = StatsBuilder.build(data, range: range, now: now, clock: clock, prices: prices)
-                }
-            }
-            return result == current ? nil : result
-        }.value
-        if let built, build == generation {
-            withAnimation(Theme.Motion.data) { stats = built }
+        let today = DayClock().day(of: Date().timeIntervalSince1970)
+        if rebuildingStats || today != statsDay {
+            statsDay = today
+            await buildStats(snapshot)
         }
         let withData = Set(snapshot.filter { !$0.value.isEmpty }.map(\.key))
         if withData != providersWithData { providersWithData = withData }
@@ -189,6 +190,33 @@ final class UsageStore {
             scanProgress = [:]
         }
         lastUpdated = snapshot.values.map(\.scannedAt).max()
+    }
+
+    private func buildStats(_ snapshot: [Provider: UsageData]) async {
+        let shown = Set(preferences.shownProviders)
+        let current = stats
+        let prices = prices
+        generation += 1
+        let build = generation
+        // Built and compared off the main thread; unchanged numbers don't touch the views at all.
+        let built: [Provider?: [StatsRange: RangeStats]]? = await Task.detached(priority: .userInitiated) {
+            let now = Date()
+            let clock = DayClock()
+            // "All" is the providers that are on, and those are the only ones shown on their own too.
+            let parts = snapshot.filter { shown.contains($0.key) }
+            var all: [Provider?: UsageData] = [nil: UsageData.merged(Array(parts.values))]
+            for (provider, data) in parts { all[provider] = data }
+            var result: [Provider?: [StatsRange: RangeStats]] = [:]
+            for (provider, data) in all {
+                for range in StatsRange.allCases {
+                    result[provider, default: [:]][range] = StatsBuilder.build(data, range: range, now: now, clock: clock, prices: prices)
+                }
+            }
+            return result == current ? nil : result
+        }.value
+        if let built, build == generation {
+            withAnimation(Theme.Motion.data) { stats = built }
+        }
     }
 }
 

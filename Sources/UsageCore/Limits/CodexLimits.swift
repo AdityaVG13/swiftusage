@@ -1,8 +1,8 @@
 import Foundation
 
-/// Codex's limits from ChatGPT, signed in with the login in each Codex home's `auth.json`: `$CODEX_HOME`,
-/// `~/.codex`, `~/.config/codex`, and side-by-side homes such as `~/.codex-work`. Codex renews those logins
-/// whenever it runs.
+/// Codex's limits from ChatGPT, signed in with the login in each Codex home's `auth.json`: `$CODEX_HOME`
+/// now or before, `~/.codex`, `~/.config/codex`, and side-by-side homes such as `~/.codex-work`. Codex
+/// renews those logins whenever it runs.
 public struct CodexLimits: LimitsSource {
     public let provider = Provider.codex
 
@@ -25,9 +25,9 @@ public struct CodexLimits: LimitsSource {
     }
 
     /// Codex homes with a login, the one Codex uses by default first.
-    static func homes(home: URL = .home) -> [URL] {
-        var homes: [URL] = []
-        if let custom = URL.environment("CODEX_HOME") { homes.append(custom) }
+    /// `configured` are the folders `CODEX_HOME` names now or has named before.
+    static func homes(home: URL = .home, configured: [String] = EnvironmentFolders.seen("CODEX_HOME")) -> [URL] {
+        var homes = configured.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
         homes += [home.appendingPathComponent(".codex"), home.appendingPathComponent(".config/codex")]
         for parent in [home, home.appendingPathComponent(".config")] {
             let prefix = parent == home ? ".codex-" : "codex-"
@@ -89,11 +89,11 @@ public struct CodexLimits: LimitsSource {
         }
         if let credits = body["credits"] as? [String: Any], credits["has_credits"] as? Bool == true,
            let balance = JSONValue.number(credits["balance"]), balance > 0 {
-            result.notes.append(LimitNote(id: "credits", label: "Credits", value: Format.grouped(Int(balance))))
+            result.notes.append(LimitNote(id: "credits", label: "Credits", value: Format.grouped(Int(saturating: balance))))
         }
         if let count = JSONValue.number(body[path: "rate_limit_reset_credits", "available_count"]), count > 0 {
             // A reset refills the plan's own windows: the session and the week, or the month on Free.
-            result.resets = LimitResets(available: Int(count), refills: own.map(\.id))
+            result.resets = LimitResets(available: Int(saturating: count), refills: own.map(\.id))
         }
         return result
     }

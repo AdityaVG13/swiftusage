@@ -117,6 +117,34 @@ enum Keychain {
     }
 }
 
+/// Config folders a tool was pointed to through the environment, such as `CLAUDE_CONFIG_DIR`. The app only
+/// sees one when it's opened from a shell that sets it, so each is remembered: a login found there once is
+/// still read after the app is opened from Finder. Folders that are gone are forgotten.
+enum EnvironmentFolders {
+    /// Every folder `$name` has named on this Mac, as written, the current one first.
+    static func seen(_ name: String, environment: [String: String] = ProcessInfo.processInfo.environment,
+                     defaults: UserDefaults = .standard) -> [String] {
+        let key = "environmentFolders." + name
+        let saved = defaults.stringArray(forKey: key) ?? []
+        var unique: Set<String> = []
+        let folders = ([environment[name] ?? ""] + saved).filter { written in
+            var isFolder: ObjCBool = false
+            return !written.isEmpty && unique.insert(written).inserted
+                && FileManager.default.fileExists(atPath: (written as NSString).expandingTildeInPath, isDirectory: &isFolder) && isFolder.boolValue
+        }
+        if folders != saved { defaults.set(folders, forKey: key) }
+        return folders
+    }
+}
+
+extension Int {
+    /// A server's number as a whole count, rounded toward zero; one past `Int`'s range saturates rather
+    /// than trapping.
+    init(saturating value: Double) {
+        self = value.isNaN ? 0 : value >= 0x1p63 ? .max : value <= -0x1p63 ? .min : Int(value)
+    }
+}
+
 /// Lenient readers for the usage APIs' JSON, which sends numbers as numbers or strings depending on the
 /// field and the day.
 enum JSONValue {

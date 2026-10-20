@@ -136,31 +136,29 @@ func outline(_ string: String, _ font: CTFont) -> CGPath {
 
 // MARK: Mark and logo
 
-/// The mark: a 3×3 grid of heatmap cells, its filled ones rising like a bar chart, the rest left faint
-/// like the part of a limit that's still unused. On a 120 grid: 32 cells, 12 gaps, corners a fifth of a
-/// cell. Rows from the top.
-let rising = [[false, false, true], [false, true, true], [true, true, true]]
-
-func mark(size: CGFloat, ink: Ink, empty: CGFloat = 0.18) -> [Shape] {
-    let unit = size / 120
-    return rising.enumerated().flatMap { row, cells in
-        cells.enumerated().map { column, filled in
-            Shape(geometry: .rect(CGRect(x: CGFloat(column) * 44 * unit, y: CGFloat(row) * 44 * unit, width: 32 * unit, height: 32 * unit),
-                                  radius: 6.4 * unit),
-                  ink: ink, opacity: filled ? 1 : empty)
-        }
-    }
+/// The mark: a tilde, the way the app says its numbers are estimates ("~$18.3K"). It's also an S on its
+/// side. One stroke 24 wide with round caps, on a 120 grid where it fills the width and sits on the
+/// middle; it turns about the center, so its two halves are the same shape.
+func mark(size: CGFloat, ink: Ink) -> [Shape] {
+    let line = CGMutablePath()
+    line.move(to: CGPoint(x: 12, y: 74))
+    line.addCurve(to: CGPoint(x: 60, y: 60), control1: CGPoint(x: 24, y: 36), control2: CGPoint(x: 52, y: 36))
+    line.addCurve(to: CGPoint(x: 108, y: 46), control1: CGPoint(x: 68, y: 84), control2: CGPoint(x: 96, y: 84))
+    var scale = CGAffineTransform(scaleX: size / 120, y: size / 120)
+    let stroke = line.copy(using: &scale)!.copy(strokingWithWidth: 24 * size / 120, lineCap: .round, lineJoin: .round, miterLimit: 10)
+    return [Shape(geometry: .outline(stroke.normalized()), ink: ink)]
 }
 
-/// The mark, then the name in Semibold at the font's own spacing. The mark spans the name from the dot
-/// of its i to the bottom of its g.
+/// The mark, then the name in Semibold at the font's own spacing. The mark is as wide as the name is tall
+/// (from the dot of the i to the bottom of the g) and centered on the x-height, where a typeset ~ sits.
 func logo(fontSize: CGFloat, ink: Ink) -> [Shape] {
-    let name = outline("SwiftUsage", googleSans(fontSize, weight: 600))
+    let font = googleSans(fontSize, weight: 600)
+    let name = outline("SwiftUsage", font)
     let box = name.boundingBoxOfPath
-    let size = box.height
-    let gap = size * 0.3
-    return mark(size: size, ink: ink).map { $0.offset(0, box.minY) }
-        + [Shape(geometry: .outline(name), ink: ink).offset(size + gap - box.minX, 0)]
+    let width = box.height
+    let gap = width * 0.3
+    return mark(size: width, ink: ink).map { $0.offset(0, -CTFontGetXHeight(font) / 2 - width / 2) }
+        + [Shape(geometry: .outline(name), ink: ink).offset(width + gap - box.minX, 0)]
 }
 
 /// Moves shapes so their bounds start at the origin.
@@ -240,17 +238,19 @@ func clearSpaceSheet(_ palette: Palette) -> [Shape] {
     let size = CGSize(width: 1280, height: 400)
     let lockup = placed(logo(fontSize: 96, ink: palette.ink))
     let lockupSize = bounds(lockup).size
-    let cell = lockupSize.height * 32 / 120
+    // The logo's mark is as wide as the logo is tall; the clear space is its height.
+    let unitMark = placed(mark(size: lockupSize.height, ink: palette.ink))
+    let unit = bounds(unitMark).height
     let labelGap: CGFloat = 64
-    let zoneTop = (size.height - lockupSize.height - cell * 2 - labelGap) / 2
-    let origin = CGPoint(x: (size.width - lockupSize.width) / 2, y: zoneTop + cell)
-    let zone = CGRect(origin: origin, size: lockupSize).insetBy(dx: -cell, dy: -cell)
+    let zoneTop = (size.height - lockupSize.height - unit * 2 - labelGap) / 2
+    let origin = CGPoint(x: (size.width - lockupSize.width) / 2, y: zoneTop + unit)
+    let zone = CGRect(origin: origin, size: lockupSize).insetBy(dx: -unit, dy: -unit)
     return card(palette, CGRect(origin: .zero, size: size)) + [
         Shape(geometry: .rect(zone, radius: 0), ink: palette.ink, opacity: 0.04),
         Shape(geometry: .rect(zone, radius: 0), ink: palette.secondary, lineWidth: 1.5, dash: 6),
-        Shape(geometry: .rect(CGRect(x: zone.minX, y: zone.minY, width: cell, height: cell), radius: cell / 5), ink: palette.ink, opacity: 0.18),
-    ] + lockup.map { $0.offset(origin.x, origin.y) } + [
-        text("Keep one cell of the mark clear on every side.", size: 22, weight: 400, ink: palette.secondary,
+    ] + unitMark.map { var faint = $0.offset(origin.x, zone.minY); faint.opacity = 0.18; return faint }
+        + lockup.map { $0.offset(origin.x, origin.y) } + [
+        text("Keep the height of the mark clear on every side.", size: 22, weight: 400, ink: palette.secondary,
              x: size.width / 2, baseline: zone.maxY + labelGap, align: 0.5),
     ]
 }
@@ -285,8 +285,9 @@ func writePNG(_ name: String, _ shapes: [Shape], size: CGSize, scale: CGFloat = 
     try rep.representation(using: .png, properties: [:])!.write(to: output.appendingPathComponent(name))
 }
 
-try writeSVG("mark.svg", mark(size: 120, ink: Palette.light.ink))
-try writeSVG("mark-white.svg", mark(size: 120, ink: Palette.dark.ink))
+// Square, so it fits avatars and favicons as is.
+try writeSVG("mark.svg", mark(size: 120, ink: Palette.light.ink), size: CGSize(width: 120, height: 120))
+try writeSVG("mark-white.svg", mark(size: 120, ink: Palette.dark.ink), size: CGSize(width: 120, height: 120))
 try writeSVG("logo.svg", placed(logo(fontSize: 96, ink: Palette.light.ink)))
 try writeSVG("logo-white.svg", placed(logo(fontSize: 96, ink: Palette.dark.ink)))
 

@@ -286,7 +286,9 @@ struct LineParser {
         var value: Int64 = 0
         var sawDigit = false
         while i < end, p[i] >= zero, p[i] <= nine {
-            value = value &* 10 &+ Int64(p[i] - zero)
+            // No response comes near a trillion tokens, so a count past it is corrupt. Capped there, no
+            // number of them can overflow the sums they go into.
+            value = min(value * 10 + Int64(p[i] - zero), 1_000_000_000_000)
             sawDigit = true
             i += 1
         }

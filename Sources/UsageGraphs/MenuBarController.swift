@@ -75,6 +75,16 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.close() }
         }
+        // A display that's unplugged or rearranged leaves the panel sized for the old one.
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.close() }
+        }
+    }
+
+    /// Opens the panel as a click on the item does. Opening the app again from Finder does this too,
+    /// which is the way in when the menu bar has hidden the item.
+    func show() {
+        if !isOpen, !panel.isVisible { open() }
     }
 
     /// Redraws the title whenever the numbers it shows change, re-arming observation after each change.
@@ -135,7 +145,20 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 
     private func open() {
-        guard let button = statusItem.button, let bar = button.window, let screen = bar.screen ?? NSScreen.main else { return }
+        guard let button = statusItem.button else { return }
+        // The item's place on screen. The menu bar hides items that don't fit beside the notch, and any
+        // the person turns off in System Settings; then the panel opens at the top right of the screen.
+        let item: (left: CGFloat, bottom: CGFloat)?
+        let screen: NSScreen
+        if let bar = button.window, bar.isVisible, let barScreen = bar.screen, barScreen.frame.intersects(bar.frame) {
+            item = (bar.convertToScreen(button.convert(button.bounds, to: nil)).minX, bar.frame.minY)
+            screen = barScreen
+        } else if let main = NSScreen.main {
+            item = nil
+            screen = main
+        } else {
+            return
+        }
         isOpen = true
         state.clearHover()
         store.panelOpened()
@@ -144,9 +167,10 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         // The modules' leading edge lines up with the item, kept 8pt inside the screen.
         let margin = Theme.Layout.margin
         let width = Theme.Layout.contentWidth + margin * 2
-        let item = bar.convertToScreen(button.convert(button.bounds, to: nil))
-        let x = min(max(item.minX - margin, screen.frame.minX + 8 - margin), screen.frame.maxX - 8 + margin - width)
-        let below = NSRect(x: screen.frame.minX, y: screen.frame.minY, width: screen.frame.width, height: bar.frame.minY - screen.frame.minY)
+        let x = min(max((item?.left ?? screen.frame.maxX) - margin, screen.frame.minX + 8 - margin), screen.frame.maxX - 8 + margin - width)
+        let top = item?.bottom ?? screen.visibleFrame.maxY
+        let below = NSRect(x: screen.frame.minX, y: screen.frame.minY, width: screen.frame.width, height: top - screen.frame.minY)
+        if state.screenHeight != screen.visibleFrame.height { state.screenHeight = screen.visibleFrame.height }
         panel.setFrame(NSRect(x: x, y: below.minY, width: width, height: below.height), display: false)
         dimmer.setFrame(below, display: false)
         // Laid out at its new size before the modules animate in, or the animation would also carry them
@@ -211,8 +235,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     }
 }
 
-/// The modules, with clear room around them for their shadows. They settle down into place as the
-/// panel opens, and stay at the top of the window however tall they are. Customize takes their place;
+/// The modules, with clear room around them for their shadows. They drop down into place with a bounce
+/// as the panel opens, and stay at the top of the window however tall they are. Customize takes their place;
 /// the numbers stay built underneath, so going back shows them as they were. The side leaving clears
 /// out quickly and the one arriving settles in just after, so their glass barely overlaps.
 private struct PanelRoot: View {
@@ -230,8 +254,8 @@ private struct PanelRoot: View {
             if customizing {
                 CustomizeView()
                     .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.98, anchor: .top)).animation(Theme.Motion.select.delay(0.05)),
-                        removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top)).animation(Theme.Motion.leave)))
+                        insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(Theme.Motion.select.delay(0.05)),
+                        removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(Theme.Motion.leave)))
             }
         }
         .background {
@@ -257,8 +281,8 @@ private struct PanelRoot: View {
         .padding(.horizontal, Theme.Layout.margin - inset)
         .padding(.top, Theme.Layout.topGap)
         .padding(.bottom, Theme.Layout.margin)
-        .scaleEffect(presentation.isPresented ? 1 : 0.94, anchor: .top)
-        .offset(y: presentation.isPresented ? 0 : -10)
+        .scaleEffect(presentation.isPresented ? 1 : 0.9, anchor: .top)
+        .offset(y: presentation.isPresented ? 0 : -18)
         // Exactly the window's height, so modules taller than it run off the bottom rather than being
         // centered.
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)

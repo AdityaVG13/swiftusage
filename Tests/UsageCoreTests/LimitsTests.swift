@@ -77,6 +77,20 @@ struct LimitsTests {
         #expect(logins.first?.account == "Tasteskill")
         #expect(logins.first?.isDefault == true)
         #expect(logins.last?.account == "Personal")
+
+        // Started from a shell that set `CLAUDE_CONFIG_DIR`, the plain default login still shows.
+        let custom = ClaudeLimits.logins(home: home, environment: ["USER": "tester", "CLAUDE_CONFIG_DIR": home.appendingPathComponent(".claude_personal").path]) { service, _ in keychain[service] }
+        #expect(custom.map(\.token) == ["personal", "default", "copy"])
+        #expect(custom.map(\.isDefault) == [true, false, false])
+
+        // A folder `CLAUDE_CONFIG_DIR` named outside the home folder, opened later without it set.
+        let elsewhere = home.appendingPathComponent("work/claude config")
+        try write("work/claude config/.claude.json", #"{"oauthAccount":{"accountUuid":"A4","organizationUuid":"O4","organizationName":"Work"}}"#)
+        var withWork = keychain
+        withWork["Claude Code-credentials-" + elsewhere.path.sha256Prefix] = #"{"claudeAiOauth":{"accessToken":"work","expiresAt":\#(future)}}"#
+        let remembered = ClaudeLimits.logins(home: home, environment: ["USER": "tester"], remembered: [elsewhere.path]) { service, _ in withWork[service] }
+        #expect(remembered.map(\.token) == ["default", "work", "copy", "personal"])
+        #expect(remembered.first?.isDefault == true)
     }
 
     @Test func codexNamesWindowsByLength() {
@@ -344,6 +358,76 @@ struct LimitsTests {
             try FileManager.default.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
             if folder != ".codex-empty" { try Data("{}".utf8).write(to: home.appendingPathComponent(folder + "/auth.json")) }
         }
-        #expect(CodexLimits.homes(home: home).map(\.lastPathComponent) == [".codex", ".codex-work", "codex-team"])
+        #expect(CodexLimits.homes(home: home, configured: []).map(\.lastPathComponent) == [".codex", ".codex-work", "codex-team"])
+        // A home `CODEX_HOME` named, now or before, comes first.
+        let named = home.appendingPathComponent("elsewhere/codex")
+        try FileManager.default.createDirectory(at: named, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: named.appendingPathComponent("auth.json"))
+        #expect(CodexLimits.homes(home: home, configured: [named.path]).first?.path == named.path)
+    }
+
+    @Test func piReadsItsOwnFolderAndTheNamedOnes() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        #expect(PiLimits.folders(home: home, configured: []).map(\.path) == ["/Users/someone/.pi/agent"])
+        #expect(PiLimits.folders(home: home, configured: ["/work/pi", "/Users/someone/.pi/agent/"]).map(\.path) == ["/work/pi", "/Users/someone/.pi/agent"])
+    }
+
+    @Test func environmentFoldersAreRememberedUntilTheyreGone() throws {
+        let suite = "usagegraphs-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-env-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        #expect(EnvironmentFolders.seen("CLAUDE_CONFIG_DIR", environment: ["CLAUDE_CONFIG_DIR": folder.path], defaults: defaults) == [folder.path])
+        // Opened from Finder, without it set.
+        #expect(EnvironmentFolders.seen("CLAUDE_CONFIG_DIR", environment: [:], defaults: defaults) == [folder.path])
+        // A folder that doesn't exist isn't kept.
+        #expect(EnvironmentFolders.seen("CLAUDE_CONFIG_DIR", environment: ["CLAUDE_CONFIG_DIR": "/nowhere"], defaults: defaults) == [folder.path])
+        try FileManager.default.removeItem(at: folder)
+        #expect(EnvironmentFolders.seen("CLAUDE_CONFIG_DIR", environment: [:], defaults: defaults).isEmpty)
+        #expect(defaults.stringArray(forKey: "environmentFolders.CLAUDE_CONFIG_DIR") == [])
+    }
+
+    // MARK: Cards across readings
+
+    @Test func aLoginOutOfSightKeepsItsCardQuietlyAtFirst() {
+        let meter = LimitMeter.percent("session", "Session", used: 11, resetsAt: nil, period: 5 * 3600)
+        let team = AccountLimits(id: "claude:a|team", provider: .claude, account: "Tasteskill", meters: [meter], updated: now.addingTimeInterval(-600))
+        let personal = AccountLimits(id: "claude:b|me", provider: .claude, account: "Personal", meters: [meter], updated: now)
+        var missingSince: [String: Date] = [:]
+
+        var cards = LimitsSources.update([team, personal], with: [personal], asked: [.claude], missingSince: &missingSince, now: now)
+        #expect(cards.map(\.id) == ["claude:b|me", "claude:a|team"])
+        #expect(cards[1].problem == nil)
+        cards = LimitsSources.update(cards, with: [personal], asked: [.claude], missingSince: &missingSince, now: now.addingTimeInterval(16 * 60))
+        #expect(cards[1].problem == "Couldn't find this login. Sign in again if you signed out.")
+        // Found again, it's itself, and a later miss starts over.
+        cards = LimitsSources.update(cards, with: [personal, team], asked: [.claude], missingSince: &missingSince, now: now.addingTimeInterval(20 * 60))
+        #expect(missingSince.isEmpty)
+        // After a day it's taken as signed out.
+        cards = LimitsSources.update([team, personal], with: [personal], asked: [.claude], missingSince: &missingSince, now: now.addingTimeInterval(86_400))
+        #expect(cards.map(\.id) == ["claude:b|me"])
+        // A provider that wasn't asked keeps its cards as they were.
+        cards = LimitsSources.update([team, personal], with: [], asked: [], missingSince: &missingSince, now: now)
+        #expect(cards.map(\.id) == ["claude:b|me", "claude:a|team"])
+        #expect(cards.allSatisfy { $0.problem == nil })
+    }
+
+    @Test func onlyALoneCardIsTakenAsRenamed() {
+        let meter = LimitMeter.percent("session", "Session", used: 11, resetsAt: nil, period: 5 * 3600)
+        func card(_ id: String, _ name: String) -> AccountLimits {
+            AccountLimits(id: id, provider: .claude, account: name, meters: [meter], updated: now)
+        }
+        var missingSince: [String: Date] = [:]
+        // The same account under the ID a newer build gives it.
+        var cards = LimitsSources.update([card("claude:a", "Tasteskill")], with: [card("claude:a|team", "Tasteskill")],
+                                         asked: [.claude], missingSince: &missingSince, now: now)
+        #expect(cards.map(\.id) == ["claude:a|team"])
+        // Two "Personal" accounts: one out of sight isn't the other, nor a third that just signed in.
+        cards = LimitsSources.update([card("claude:b", "Personal"), card("claude:c", "Personal")],
+                                     with: [card("claude:c", "Personal"), card("claude:d", "Personal")],
+                                     asked: [.claude], missingSince: &missingSince, now: now)
+        #expect(Set(cards.map(\.id)) == ["claude:b", "claude:c", "claude:d"])
     }
 }

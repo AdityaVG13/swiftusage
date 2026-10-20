@@ -15,6 +15,16 @@ SwiftUsage is a macOS menu bar app that shows your coding agents' usage: session
 
 Usage history is read locally from each tool's own files and never leaves your Mac. Limits are the exception: they come from each provider's own usage API, signed in with the login its tool already keeps on this Mac (see [Limits](#limits)).
 
+## Install
+
+SwiftUsage needs macOS 26 or later, on Apple silicon or Intel. It runs natively on both and never uses Rosetta.
+
+1. Download `SwiftUsage-<version>.dmg` from the [latest release](https://github.com/Blueemi/swiftusage/releases/latest).
+2. Open it and drag SwiftUsage to Applications.
+3. Open SwiftUsage from Applications. It has no Dock icon or window: it's the item in the menu bar, and clicking it opens the panel. Open at Login in the ⋯ menu starts it with your Mac.
+
+The app is signed with a Developer ID and notarized by Apple; the first time it opens, macOS asks once whether to open an app downloaded from the internet. To update, quit it (⋯ → Quit SwiftUsage) and drag the new version over the old one; settings and the saved history carry over. To read Codex's older, compressed history too, install zstd: `brew install zstd`.
+
 ## The panel
 
 ### Models
@@ -63,6 +73,8 @@ Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, 
 | Pi | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`: `sessions/*/*.jsonl` |
 | Devin | `~/.local/share/devin`: `cli/sessions.db` and `cli-next/sessions.db` |
 
+The variables are read from the app's own environment. Opened from Finder or at login, it doesn't see ones set in a shell profile such as `~/.zshrc`, so it reads the default folder; `launchctl setenv CLAUDE_CONFIG_DIR ~/somewhere` passes one to apps opened after it, until you log out.
+
 Some history can't be counted:
 
 - **Cursor** keeps token counts on its servers, so only its chats and messages are counted, and its tokens show as "–".
@@ -95,12 +107,12 @@ Codex and Claude hand out limit resets now and then, each of which refills the s
 /Applications/SwiftUsage.app/Contents/MacOS/swiftusage --limits --provider antigravity
 ```
 
-## Build and install
+## Build from source
 
 Needs Xcode 26 or later (Swift 6.2) and macOS 26 or later.
 
 ```sh
-./scripts/build-app.sh            # builds build/SwiftUsage.app
+./scripts/build-app.sh            # builds build/SwiftUsage.app, signed ad hoc for this Mac
 ./scripts/build-app.sh --install  # also copies it to /Applications and launches it
 swift test                        # parser, incremental reading, stats, pricing and limits tests
 ```
@@ -110,6 +122,28 @@ swift test                        # parser, incremental reading, stats, pricing 
 ```sh
 /Applications/SwiftUsage.app/Contents/MacOS/swiftusage --dump --provider claude
 ```
+
+### Releasing
+
+`./scripts/release.sh` makes a release in `dist/`: `SwiftUsage-<version>.dmg` and `.zip`, built for Apple silicon and Intel, signed with the keychain's Developer ID Application certificate and the hardened runtime, notarized by Apple and stapled; their `SHA256SUMS`; the version's notes from `CHANGELOG.md`; and the app's debug symbols, for reading crash reports. It runs the tests first, and checks everything else it needs before it builds. It lays out the disk image with [dmgbuild](https://github.com/dmgbuild/dmgbuild), which it runs through uv (`brew install uv`).
+
+1. Set the version in `VERSION` and describe it under its own heading in `CHANGELOG.md`. The build number counts commits, so commit before releasing.
+2. Once on each Mac, save notarytool's credentials in the keychain as `swiftusage`. With an App Store Connect API key (Users and Access → Integrations → Team Keys, Developer role):
+
+   ```sh
+   xcrun notarytool store-credentials swiftusage --key AuthKey_<key ID>.p8 --key-id <key ID> --issuer <issuer ID>
+   ```
+
+   Or with an Apple Account and an app-specific password, `--apple-id <email> --team-id <team ID>`. `NOTARY_PROFILE` picks credentials saved under another name, and `SIGN_IDENTITY` another certificate.
+3. Run `./scripts/release.sh`, then publish what it made:
+
+   ```sh
+   v=$(<VERSION)
+   gh release create v$v dist/SwiftUsage-$v.dmg dist/SwiftUsage-$v.zip dist/SHA256SUMS \
+       --title "SwiftUsage $v" --notes-file dist/SwiftUsage-$v-notes.md
+   ```
+
+`./scripts/release.sh --skip-notarization` makes the same files without notarizing them, to check the packaging; Gatekeeper turns those away on other Macs.
 
 ## How the numbers are counted
 
@@ -151,3 +185,11 @@ Claude Code deletes transcripts after 30 days by default (`cleanupPeriodDays`). 
 ## Brand
 
 The name, mark, logo, app icon, colors and type are in the [brand kit](brand/).
+
+## Author
+
+SwiftUsage is made by [@blueemi99](https://x.com/blueemi99). Follow along on X for updates and what's next.
+
+## Notices
+
+The price lists the app ships with come from LiteLLM and OpenUsage, under the MIT License; [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) has their licenses, and the app carries a copy. Provider names and logos belong to their owners, and SwiftUsage isn't affiliated with any of them.

@@ -53,7 +53,8 @@ public enum PriceSources {
     static func litellm(_ data: Data) -> [String: ModelPrice]? {
         guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
         var best: [String: (rank: Int, price: ModelPrice)] = [:]
-        let threshold = try! NSRegularExpression(pattern: "^input_cost_per_token_above_(\\d+)k_tokens$")
+        // Up to nine digits, so a malformed key in the fetched list can't overflow the threshold.
+        let threshold = try! NSRegularExpression(pattern: "^input_cost_per_token_above_(\\d{1,9})k_tokens$")
         for (id, value) in root {
             guard let entry = value as? [String: Any], let input = number(entry["input_cost_per_token"]),
                   number(entry["output_cost_per_token"]) != nil

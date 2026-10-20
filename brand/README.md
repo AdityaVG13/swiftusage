@@ -22,29 +22,30 @@
   </picture>
 </p>
 
-A 3×3 grid of heatmap cells. The filled cells rise left to right like a bar chart, and the empty ones are what's left, like the unused part of a limit. It's the app's two pictures (the activity heatmap and the usage chart) in nine squares.
+A tilde. The app's numbers are estimates (~$18.3K, ~120,941× more tokens than Dune), and ~ is how you say so honestly. It's also an S lying on its side, and home in a terminal.
 
-- On a 120 grid: 32 cells with 12 between them, corners a fifth of a cell (6.4).
-- Filled cells are the ink; empty cells are the ink at 18%. The 16pt menu bar icon raises them to 25% so they still show.
+- One stroke with round caps, 24 wide on a 120 grid. Its path runs from (12, 74) to (108, 46) through the center, with its control points at (24, 36), (52, 36), (68, 84) and (96, 84). It turns about the center, so its two halves are the same shape.
+- The caps reach the grid's sides; `mark.svg` keeps the full square so it fits avatars and favicons as is.
+- The 16pt menu bar icon draws it with a 2.6pt stroke, a little lighter than the logo's, so it sits with the menu bar's other icons.
 
 ## Logo
 
-The mark, then the name. The mark spans the name from the dot of the i to the bottom of the g, 30% of its height away.
+The mark, then the name. The mark is as wide as the name is tall (from the dot of the i to the bottom of the g), 30% of that away, and centered on the x-height, where a typeset ~ sits.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="clear-space-dark.svg">
-  <img alt="The logo inside a dashed box one cell of the mark away from it on every side" src="clear-space-light.svg">
+  <img alt="The logo inside a dashed box the height of the mark away from it on every side" src="clear-space-light.svg">
 </picture>
 
-- Keep at least one cell's width clear around the logo.
+- Keep at least the height of the mark clear around the logo.
 - Use the white versions on dark backgrounds rather than inverting the black ones.
 - Don't recolor, outline, stretch, rotate or add effects to the mark or the name.
 
 ## App icon
 
-<img alt="The SwiftUsage app icon: the white mark on a black squircle" src="icon.png" width="160">
+<img alt="The SwiftUsage app icon: the white tilde on a black squircle" src="icon.png" width="160">
 
-The white mark on a black squircle, 432 of Apple's 1024 grid. The build draws it with `scripts/make-icon.swift`, and the app draws the menu bar icon in `MenuBarIcon`.
+The white mark on a black squircle, 520 wide on Apple's 1024 grid. The build draws it with `scripts/make-icon.swift`, and the app draws the menu bar icon in `MenuBarIcon`.
 
 ## Color
 
