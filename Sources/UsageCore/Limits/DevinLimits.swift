@@ -25,7 +25,11 @@ public struct DevinLimits: LimitsSource {
         guard let status = response.json?[path: "userStatus", "planStatus"] as? [String: Any] else {
             return [.failed(id, provider, "Devin's usage API sent something unexpected.")]
         }
-        return [Self.limits(status, id: id)]
+        let result = Self.limits(status, id: id)
+        guard result.hasValues else {
+            return [.failed(id, provider, plan: result.plan, "Devin's usage API sent no limits the app knows.")]
+        }
+        return [result]
     }
 
     /// Devin reports what's left, not what's used. A quota with a reset time but no percentage is used up:
@@ -42,6 +46,9 @@ public struct DevinLimits: LimitsSource {
         }
         if let micros = JSONValue.number(status["overageBalanceMicros"]) {
             result.notes.append(LimitNote(id: "extra", label: "Extra usage balance", value: Format.dollars(max(0, micros) / 1_000_000)))
+        }
+        if !result.hasValues {
+            return .failed(id, .devin, plan: result.plan, "Devin's usage API sent no limits the app knows.")
         }
         return result
     }

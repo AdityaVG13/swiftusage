@@ -143,15 +143,16 @@ public actor AntigravityLimits: LimitsSource {
         var rejected = false
         for host in Self.hosts {
             guard let response = await HTTP.post(host + "/v1internal:retrieveUserQuotaSummary", headers: headers.merging(["User-Agent": "antigravity"]) { $1 }, json: [String: Any]()) else { continue }
-            if response.ok, let body = response.json, body["groups"] != nil {
+            if response.ok, let body = response.json, let groups = body["groups"] as? [[String: Any]], !groups.isEmpty {
                 bodies.append(body)
                 if Self.summaryMeters(bodies).count >= 4 { break }
             } else if response.status == 401 {
                 rejected = true
             }
         }
-        if !bodies.isEmpty {
-            return .success(AccountLimits(id: "", provider: provider, plan: await plan(token: token), meters: Self.summaryMeters(bodies)))
+        let summary = Self.summaryMeters(bodies)
+        if !summary.isEmpty {
+            return .success(AccountLimits(id: "", provider: provider, plan: await plan(token: token), meters: summary))
         }
         if rejected { return .rejected }
 

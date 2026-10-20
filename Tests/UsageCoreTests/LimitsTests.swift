@@ -204,6 +204,27 @@ struct LimitsTests {
         #expect(fresh.keepingValues(of: previous, now: now) == fresh)
     }
 
+    @Test func structurallyUnexpectedResponsesKeepLastGoodLimits() {
+        let codex = CodexLimits.limits(["plan_type": "pro", "email": "a@b.c"], id: "codex:fixture", account: "a@b.c")
+        #expect(codex.problem == "ChatGPT's usage API sent no limits the app knows.")
+        #expect(codex.plan == "Pro")
+        #expect(codex.account == "a@b.c")
+
+        let devin = DevinLimits.limits(["planInfo": ["planName": "Max"]], id: "devin:fixture")
+        #expect(devin.problem == "Devin's usage API sent no limits the app knows.")
+        #expect(devin.plan == "Max")
+
+        for fresh in [codex, devin] {
+            let previous = AccountLimits(id: fresh.id, provider: fresh.provider, meters: [
+                .percent("weekly", "Weekly", used: 71, resetsAt: now.addingTimeInterval(3600), period: 604_800),
+            ], updated: now)
+            var missing: [String: Date] = [:]
+            let updated = LimitsSources.update([previous], with: [fresh], asked: [fresh.provider], missingSince: &missing, now: now)
+            #expect(updated.first?.meters.first?.used == 71)
+            #expect(updated.first?.problem == fresh.problem)
+        }
+    }
+
     // MARK: More providers and logins
 
     @Test func antigravityReadsItsKeychainLogin() throws {

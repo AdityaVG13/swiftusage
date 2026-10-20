@@ -56,6 +56,9 @@ public struct CodexLimits: LimitsSource {
         guard let body = response.json else { return .failed(id, provider, account: email, "ChatGPT's usage API sent something unexpected.") }
         var result = limits(body, id: id, account: body["email"] as? String ?? email)
         result.provider = provider
+        if !result.hasValues {
+            return .failed(id, provider, account: result.account, plan: result.plan, "ChatGPT's usage API sent no limits the app knows.")
+        }
         if result.resets != nil {
             // The usage answer only counts the resets; their list says when they lapse.
             if let list = await HTTP.get(resetsURL, headers: resetHeaders(token: token, accountID: accountID)), list.ok, let body = list.json {
@@ -93,6 +96,9 @@ public struct CodexLimits: LimitsSource {
         if let count = JSONValue.number(body[path: "rate_limit_reset_credits", "available_count"]), count > 0 {
             // A reset refills the plan's own windows: the session and the week, or the month on Free.
             result.resets = LimitResets(available: Int(saturating: count), refills: own.map(\.id))
+        }
+        if !result.hasValues {
+            result.problem = "ChatGPT's usage API sent no limits the app knows."
         }
         return result
     }
