@@ -173,6 +173,13 @@ struct ProviderTests {
         // No total recorded: Google kept it separate.
         #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "google", reasoningAlwaysSeparate: false)?.output == 8)
         #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "openai", reasoningAlwaysSeparate: false)?.output == 5)
+        // Some providers' output is recorded net of reasoning, below zero; with reasoning added it's the reply.
+        let net = Database.tokens(input: 20577, output: -185, reasoning: 1849, cacheRead: 5376, cacheWrite: 0, total: 27617,
+                                  provider: "opencode-go", reasoningAlwaysSeparate: false)
+        #expect(net == TokenCounts(input: 20577, output: 1664, cacheRead: 5376))
+        // Never below zero, and only output may be.
+        #expect(Database.tokens(input: 10, output: -5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: nil, provider: "openai", reasoningAlwaysSeparate: false)?.output == 0)
+        #expect(Database.tokens(input: -10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0, total: nil, provider: "openai", reasoningAlwaysSeparate: false) == nil)
     }
 
     @Test func corruptNumbersAreSkippedWithoutTrapping() async throws {

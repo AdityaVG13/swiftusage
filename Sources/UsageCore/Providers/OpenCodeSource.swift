@@ -162,7 +162,9 @@ public actor OpenCodeSource: UsageSource {
             var cost: Double?
             if role == "assistant" {
                 cost = row.isNull(13) ? nil : row.double(13)
-                guard let input = row.tokenCount(7), let output = row.tokenCount(8),
+                // Output can be below zero (see `tokens`), so it isn't read as a count.
+                let output = row.isNull(8) ? 0 : row.int(8)
+                guard let input = row.tokenCount(7),
                       let reasoning = row.tokenCount(9), let cacheRead = row.tokenCount(10),
                       let cacheWrite = row.tokenCount(11),
                       let total = row.isNull(12) ? .some(nil) : row.tokenCount(12).map(Optional.some),
@@ -180,7 +182,9 @@ public actor OpenCodeSource: UsageSource {
         /// sum including reasoning matches it only when reasoning is separate.
         static func tokens(input: Int64, output: Int64, reasoning: Int64, cacheRead: Int64, cacheWrite: Int64,
                            total: Int64?, provider: String?, reasoningAlwaysSeparate: Bool) -> TokenCounts? {
-            guard let input = TokenCount.parse(input), let output = TokenCount.parse(output),
+            // Some providers' output is recorded net of reasoning, so below zero when reasoning outweighs it;
+            // the reply is output and reasoning together.
+            guard let input = TokenCount.parse(input), (-TokenCount.max...TokenCount.max).contains(output),
                   let reasoning = TokenCount.parse(reasoning), let cacheRead = TokenCount.parse(cacheRead),
                   let cacheWrite = TokenCount.parse(cacheWrite)
             else { return nil }
@@ -194,7 +198,7 @@ public actor OpenCodeSource: UsageSource {
             } else {
                 separate = reasoning > output || provider == "google"
             }
-            return TokenCounts(input: input, output: output + (separate ? reasoning : 0), cacheRead: cacheRead, cacheWrite: cacheWrite)
+            return TokenCounts(input: input, output: max(0, output + (separate ? reasoning : 0)), cacheRead: cacheRead, cacheWrite: cacheWrite)
         }
     }
 }
