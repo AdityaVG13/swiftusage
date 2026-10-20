@@ -19,6 +19,14 @@ public enum ModelName {
         var name = id.lowercased()
         if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
         if let slash = name.lastIndex(of: "/") { name = String(name[name.index(after: slash)...]) }
+        if let anthropic = name.range(of: "anthropic.") { name = String(name[anthropic.upperBound...]) }
+        if let at = name.firstIndex(of: "@") { name = String(name[..<at]) }
+        if let dash = name.range(of: "-v", options: .backwards) {
+            let pieces = name[dash.upperBound...].split(separator: ":", omittingEmptySubsequences: false)
+            if (1...2).contains(pieces.count), pieces.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) {
+                name = String(name[..<dash.lowerBound])
+            }
+        }
         if name.hasPrefix("claude-") { name.removeFirst("claude-".count) }
 
         var parts = name.split(whereSeparator: { $0 == "-" || $0 == "_" || $0 == " " }).map(String.init)
