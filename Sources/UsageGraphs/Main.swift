@@ -327,6 +327,11 @@ enum Replay {
         parent == "/" || child.hasPrefix(parent + "/")
     }
 
+    private static func fail(_ step: String, _ error: Error) -> Never {
+        FileHandle.standardError.write(Data("swiftusage: \(step): \(error)\n".utf8))
+        exit(1)
+    }
+
     static func run(source: String, work: String, output: String) {
         let fm = FileManager.default
         let sourcePath = resolve(source)
@@ -346,7 +351,11 @@ enum Replay {
             }
             try? fm.removeItem(at: workURL)
         }
-        try! fm.createDirectory(at: workURL, withIntermediateDirectories: true)
+        do {
+            try fm.createDirectory(at: workURL, withIntermediateDirectories: true)
+        } catch {
+            fail("could not create replay work directory \(work)", error)
+        }
         fm.createFile(atPath: marker.path, contents: Data())
 
         let done = DispatchSemaphore(value: 0)
@@ -355,7 +364,7 @@ enum Replay {
             let cache = workURL.appendingPathComponent("index.json")
             let files = UsageIndex.discoverTranscripts(in: URL(fileURLWithPath: sourcePath))
             let environment = ProcessInfo.processInfo.environment
-            let rounds = environment["REPLAY_ROUNDS"].flatMap(Int.init) ?? 7
+            let rounds = max(1, environment["REPLAY_ROUNDS"].flatMap(Int.init) ?? 7)
             var generator = SplitMix(seed: environment["REPLAY_SEED"].flatMap(UInt64.init) ?? 0x5EED_2026)
             var cuts: [String: [UInt64]] = [:]
             for (relative, info) in files {
@@ -368,17 +377,21 @@ enum Replay {
                 for (relative, info) in files {
                     let range = cuts[relative]![round]..<cuts[relative]![round + 1]
                     let target = projects.appendingPathComponent(relative)
-                    try! fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    if !fm.fileExists(atPath: target.path) { fm.createFile(atPath: target.path, contents: nil) }
-                    guard !range.isEmpty else { continue }
-                    let reader = try! FileHandle(forReadingFrom: URL(fileURLWithPath: info.path))
-                    try! reader.seek(toOffset: range.lowerBound)
-                    let bytes = try! reader.read(upToCount: Int(range.count)) ?? Data()
-                    try! reader.close()
-                    let writer = try! FileHandle(forWritingTo: target)
-                    try! writer.seekToEnd()
-                    try! writer.write(contentsOf: bytes)
-                    try! writer.close()
+                    do {
+                        try fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                        if !fm.fileExists(atPath: target.path) { fm.createFile(atPath: target.path, contents: nil) }
+                        guard !range.isEmpty else { continue }
+                        let reader = try FileHandle(forReadingFrom: URL(fileURLWithPath: info.path))
+                        try reader.seek(toOffset: range.lowerBound)
+                        let bytes = try reader.read(upToCount: Int(range.count)) ?? Data()
+                        try reader.close()
+                        let writer = try FileHandle(forWritingTo: target)
+                        try writer.seekToEnd()
+                        try writer.write(contentsOf: bytes)
+                        try writer.close()
+                    } catch {
+                        fail("could not replay \(relative)", error)
+                    }
                 }
                 _ = await index.refresh()
                 refreshes += 1
@@ -389,8 +402,12 @@ enum Replay {
             }
             let incremental = await index.refresh()
             let onePass = await UsageIndex(projectsURL: projects, cacheURL: nil).refresh()
-            try! Dump.jsonReport(incremental).write(to: URL(fileURLWithPath: output + "-incremental.json"))
-            try! Dump.jsonReport(onePass).write(to: URL(fileURLWithPath: output + "-onepass.json"))
+            do {
+                try Dump.jsonReport(incremental).write(to: URL(fileURLWithPath: output + "-incremental.json"))
+                try Dump.jsonReport(onePass).write(to: URL(fileURLWithPath: output + "-onepass.json"))
+            } catch {
+                fail("could not write replay output \(output)", error)
+            }
             print("replayed \(files.count) transcripts in \(rounds) rounds (\(refreshes) refreshes, index reloaded from disk after round \(rounds / 2 + 1))")
             done.signal()
         }
