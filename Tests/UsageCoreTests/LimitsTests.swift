@@ -274,6 +274,34 @@ struct LimitsTests {
         #expect(logins.first?.expires == Date(timeIntervalSince1970: 1_792_500_000))
     }
 
+    @Test func expiredPiClaudeAccountKeepsItsExistingCard() {
+        let token = "sk-ant-oat-fixture"
+        let profile = AnthropicUsage.Profile(accountID: "A", organizationID: "O", organizationName: "me@x.com's Organization", email: "me@x.com", plan: "Max")
+        let live = PiLimits.identity(for: token, expired: false, profile: profile)
+        #expect(live.id == "claude:a|o")
+        #expect(live.name == "Claude · Personal")
+
+        let expired = PiLimits.identity(for: token, expired: true)
+        #expect(expired.id == "claude:a|o")
+        #expect(expired.name == "Claude · Personal")
+
+        let previous = AccountLimits(id: live.id, provider: .pi, account: live.name, meters: [
+            .percent("weekly", "Weekly", used: 31, resetsAt: now.addingTimeInterval(3600), period: 604_800),
+        ], updated: now)
+        let failed = AccountLimits.failed(expired.id, .pi, account: expired.name, "Login expired. Run `pi` to renew it.")
+        var missing: [String: Date] = [:]
+        let cards = LimitsSources.update([previous], with: [failed], asked: [.pi], missingSince: &missing, now: now)
+        #expect(cards.count == 1)
+        #expect(cards.first?.id == "claude:a|o")
+        #expect(cards.first?.account == "Claude · Personal")
+        #expect(cards.first?.meters.first?.used == 31)
+        #expect(cards.first?.problem == "Login expired. Run `pi` to renew it.")
+
+        let cold = PiLimits.identity(for: "sk-ant-oat-never-seen", expired: true)
+        #expect(cold.id == "pi-claude:" + "sk-ant-oat-never-seen".sha256Prefix)
+        #expect(cold.name == "Claude")
+    }
+
     @Test func claudeDesktopLoginsDecrypt() throws {
         let password = "desktop-storage-password"
         let account = "a2"

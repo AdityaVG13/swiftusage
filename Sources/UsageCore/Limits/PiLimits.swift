@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Pi runs on the subscriptions it's signed in to, so its limits are theirs: the Claude, ChatGPT and xAI
 /// logins in Pi's `auth.json` (`~/.pi/agent`, and `$PI_CODING_AGENT_DIR` now or before). A subscription
@@ -6,6 +7,7 @@ import Foundation
 public struct PiLimits: LimitsSource {
     public let provider = Provider.pi
     private static let renew = "Run `pi` to renew it."
+    private static let identities = Mutex<[String: (id: String, name: String)]>([:])
 
     public init() {}
 
@@ -39,15 +41,26 @@ public struct PiLimits: LimitsSource {
         return folders.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
+    static func identity(for access: String, expired: Bool, profile: AnthropicUsage.Profile? = nil) -> (id: String, name: String) {
+        let key = access.sha256Prefix
+        if !expired, let profile {
+            let identity = (id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "))
+            identities.withLock { $0[key] = identity }
+            return identity
+        }
+        return identities.withLock { $0[key] } ?? ("pi-claude:" + key, "Claude")
+    }
+
     private func limits(_ login: Login) async -> AccountLimits {
         let expired = login.expires.map { $0 < Date() } ?? false
         switch login.service {
         case .claude:
-            let fallbackID = "pi-claude:" + login.access.sha256Prefix
-            if expired { return .failed(fallbackID, provider, account: "Claude", "Login expired. \(Self.renew)") }
-            let profile = await AnthropicUsage.shared.profile(token: login.access)
-            let name = ["Claude", profile?.label].compactMap { $0 }.joined(separator: " · ")
-            return await AnthropicUsage.shared.limits(id: profile?.id ?? fallbackID, provider: provider, account: name, token: login.access,
+            if expired {
+                let (id, name) = Self.identity(for: login.access, expired: true)
+                return .failed(id, provider, account: name, "Login expired. \(Self.renew)")
+            }
+            let (id, name) = Self.identity(for: login.access, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
+            return await AnthropicUsage.shared.limits(id: id, provider: provider, account: name, token: login.access,
                                                       renew: Self.renew, plan: nil)
         case .chatGPT:
             var result = await CodexLimits.limits(token: login.access, accountID: login.accountID, provider: provider, renew: Self.renew)
