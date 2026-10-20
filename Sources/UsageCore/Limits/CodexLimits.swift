@@ -91,7 +91,7 @@ public struct CodexLimits: LimitsSource {
         }
         if let credits = body["credits"] as? [String: Any], credits["has_credits"] as? Bool == true,
            let balance = JSONValue.number(credits["balance"]), balance > 0 {
-            result.notes.append(LimitNote(id: "credits", label: "Credits", value: Format.grouped(Int(saturating: balance))))
+            result.notes.append(LimitNote(id: "credits", label: "Credits", value: Format.grouped(balance)))
         }
         if let count = JSONValue.number(body[path: "rate_limit_reset_credits", "available_count"]), count > 0 {
             // A reset refills the plan's own windows: the session and the week, or the month on Free.

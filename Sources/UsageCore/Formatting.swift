@@ -77,11 +77,18 @@ public enum Format {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         formatter.locale = Locale(identifier: "en_US")
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
         return formatter
     }()
 
     /// 242379 → "242,379"
     public static func grouped(_ value: Int) -> String {
+        grouped.string(from: NSNumber(value: value)) ?? String(value)
+    }
+
+    /// 1234.5 → "1,234.5", 0.75 → "0.75", 12 → "12"
+    public static func grouped(_ value: Double) -> String {
         grouped.string(from: NSNumber(value: value)) ?? String(value)
     }
 

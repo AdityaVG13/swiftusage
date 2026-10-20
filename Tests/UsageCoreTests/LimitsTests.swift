@@ -128,6 +128,11 @@ struct LimitsTests {
         #expect(CodexLimits.plan("team_plus") == "Team Plus")
     }
 
+    @Test func fractionalCodexCreditsAreNotTruncated() {
+        let result = CodexLimits.limits(["credits": ["has_credits": true, "balance": "0.75"]], id: "codex:fixture", account: nil)
+        #expect(result.notes.first?.value == "0.75")
+    }
+
     @Test func devinReportsWhatsLeft() {
         let status = object("""
             {"planInfo":{"planName":"Max","hideDailyQuota":true},"dailyQuotaRemainingPercent":100,"weeklyQuotaRemainingPercent":94,
