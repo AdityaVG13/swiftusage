@@ -20,7 +20,7 @@ public enum ResetOutcome: Sendable, Equatable {
 /// settles it, the ID is kept with the reset it named and sent again on the next try, so a request
 /// whose answer was lost comes back as already used instead of using a second reset.
 public actor ResetClaims {
-    public static let shared = ResetClaims(storage: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+    public static let shared = ResetClaims(storage: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("dev.tasteskill.UsageGraphs/reset-requests.json"))
 
     enum Login: Sendable, Equatable {
@@ -53,17 +53,18 @@ public actor ResetClaims {
     private let storage: URL?
     private var logins: [String: Login] = [:]
     /// By account: the reset the last request named and its ID, until an answer settles them.
-    private var unsettled: [String: Pending] = [:] {
-        didSet { save() }
-    }
+    private var unsettled: [String: Pending] = [:]
 
     init(send: @escaping @Sendable (Request) async -> HTTP.Response? = ResetClaims.network, storage: URL? = nil) {
         self.send = send
         self.storage = storage
-        if let storage, let data = try? Data(contentsOf: storage),
-           let loaded = try? JSONDecoder().decode([String: Pending].self, from: data) {
-            let now = Date()
-            unsettled = loaded.filter { now.timeIntervalSince($0.value.sent) <= .day }
+        if let storage, let data = try? Data(contentsOf: storage) {
+            if let loaded = try? JSONDecoder().decode([String: Pending].self, from: data) {
+                let now = Date()
+                unsettled = loaded.filter { now.timeIntervalSince($0.value.sent) <= .day }
+            } else {
+                UnreadableFile.setAside(storage)
+            }
         }
     }
 
@@ -76,6 +77,7 @@ public actor ResetClaims {
     public func use(_ account: String) async -> ResetOutcome {
         if let pending = unsettled[account], Date().timeIntervalSince(pending.sent) > .day {
             unsettled[account] = nil
+            save()
         }
         let repeating = unsettled[account] != nil
         switch logins[account] {
@@ -101,14 +103,18 @@ public actor ResetClaims {
                 }
                 target = credit.id
             }
-            let pending = pendingRequest(for: account, target: target)
+            guard let pending = pendingRequest(for: account, target: target) else {
+                return .notUsed("The app couldn't save the reset request, so it wasn't sent. Check that your disk isn't full.")
+            }
             let response = await send(Request(url: CodexLimits.resetsURL + "/consume", headers: headers,
                                               body: ["redeem_request_id": pending.request, "credit_id": pending.target]))
             return settle(account, request: pending.request, CodexLimits.resetOutcome(response, renew: renew), repeating: repeating)
         case let .anthropic(token, organization, grant, renew):
             // It goes in the address.
             guard UUID(uuidString: organization) != nil else { return .notUsed("Anthropic sent an organization the app doesn't know.") }
-            let pending = pendingRequest(for: account, target: grant)
+            guard let pending = pendingRequest(for: account, target: grant) else {
+                return .notUsed("The app couldn't save the reset request, so it wasn't sent. Check that your disk isn't full.")
+            }
             let response = await send(AnthropicUsage.resetRequest(token: token, organization: organization, grant: pending.target, request: pending.request))
             let outcome = settle(account, request: pending.request, AnthropicUsage.resetOutcome(response, renew: renew), repeating: repeating)
             await AnthropicUsage.shared.forgetResetGrants(account)
@@ -117,10 +123,14 @@ public actor ResetClaims {
     }
 
     /// The request still waiting for an answer, or a new one for `target`.
-    private func pendingRequest(for account: String, target: String) -> Pending {
+    private func pendingRequest(for account: String, target: String) -> Pending? {
         if let pending = unsettled[account] { return pending }
         let fresh = Pending(target: target, request: UUID().uuidString.lowercased(), sent: Date())
         unsettled[account] = fresh
+        guard save() else {
+            unsettled[account] = nil
+            return nil
+        }
         return fresh
     }
 
@@ -129,14 +139,23 @@ public actor ResetClaims {
     private func settle(_ account: String, request: String, _ answer: (outcome: ResetOutcome, settled: Bool), repeating: Bool) -> ResetOutcome {
         var settled = answer.settled
         if !repeating, case .notUsed = answer.outcome { settled = true }
-        if settled, unsettled[account]?.request == request { unsettled[account] = nil }
+        if settled, unsettled[account]?.request == request {
+            unsettled[account] = nil
+            save()
+        }
         if repeating, !settled, case .notUsed(let why) = answer.outcome { return .unsure(why) }
         return answer.outcome
     }
 
-    private func save() {
-        guard let storage else { return }
-        try? FileManager.default.createDirectory(at: storage.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? JSONEncoder().encode(unsettled).write(to: storage, options: .atomic)
+    @discardableResult
+    private func save() -> Bool {
+        guard let storage else { return true }
+        do {
+            try FileManager.default.createDirectory(at: storage.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(unsettled).write(to: storage, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
     }
 }

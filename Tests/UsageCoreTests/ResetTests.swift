@@ -200,6 +200,53 @@ struct ResetTests {
         #expect(freshAnthropic.sent.first?.body?["grant_id"] == "g3")
     }
 
+    @Test func unwritableResetJournalStillSendsAndSpendsAgainAfterRestart() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-resets-unwritable-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? FileManager.default.removeItem(at: folder)
+        }
+        let storage = folder.appendingPathComponent("reset-requests.json")
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+
+        let expected = ResetOutcome.notUsed("The app couldn't save the reset request, so it wasn't sent. Check that your disk isn't full.")
+        let list = answer(200, #"{"credits":[{"id":"a","status":"available"},{"id":"b","status":"available"}]}"#)
+        let chatGPT = Provider([list, list])
+        for _ in 0..<2 {
+            let claims = ResetClaims(send: chatGPT.send, storage: storage)
+            await claims.offer(.chatGPT(token: "fixture", accountID: nil, renew: "Fixture login"), for: "account")
+            #expect(await claims.use("account") == expected)
+        }
+        #expect(!FileManager.default.fileExists(atPath: storage.path))
+        #expect(chatGPT.sent.filter { $0.body != nil }.isEmpty)
+
+        let organization = "4f2c1f39-6a3e-4d6f-9a51-6f0f2b6f2f10"
+        let anthropic = Provider([answer(200, #"{"result":"reset"}"#)])
+        let claude = ResetClaims(send: anthropic.send, storage: storage)
+        await claude.offer(.anthropic(token: "fixture", organization: organization, grant: "g1", renew: ""), for: "claude:a|o")
+        #expect(await claude.use("claude:a|o") == expected)
+        #expect(anthropic.sent.isEmpty)
+
+        // Corrupt journals are set aside under unique timestamped names rather than overwritten.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        for broken in ["{truncated", #"{"account":{"new-version":true}}"#] {
+            try Data(broken.utf8).write(to: storage)
+            let recoveredProvider = Provider([answer(200, #"{"result":"reset"}"#)])
+            let recovered = ResetClaims(send: recoveredProvider.send, storage: storage)
+            await recovered.offer(.anthropic(token: "fixture", organization: organization, grant: "g1", renew: ""), for: "claude:a|o")
+            #expect(await recovered.use("claude:a|o") == .reset)
+        }
+        let backups = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("reset-requests.json.unreadable-") }
+        #expect(backups.count == 2)
+        #expect(backups.allSatisfy {
+            $0.lastPathComponent.range(of: #"^reset-requests\.json\.unreadable-\d{8}-\d{6}(-\d+)?$"#, options: .regularExpression) != nil
+        })
+        let contents = try Set(backups.map { try String(contentsOf: $0, encoding: .utf8) })
+        #expect(contents == ["{truncated", #"{"account":{"new-version":true}}"#])
+    }
+
     @Test func codexStopsWhenNoResetIsLeft() async {
         let provider = Provider([answer(200, #"{"credits":[],"available_count":0}"#)])
         let claims = ResetClaims(send: provider.send)
