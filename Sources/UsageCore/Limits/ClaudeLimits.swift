@@ -389,7 +389,7 @@ struct ResetGrants: Sendable, Equatable {
     func resets(now: Date = Date()) -> LimitResets? {
         guard eligible else { return nil }
         let held = grants.filter { live($0, now: now) }
-        let count = held.reduce(0) { $0 + $1.left }
+        let count = held.reduce(0) { $0.addingReportingOverflow($1.left).overflow ? .max : $0 + $1.left }
         guard count > 0 else { return nil }
         let next = usable(now: now)
         let windows = ["five_hour": "session", "seven_day": "weekly"]

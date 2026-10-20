@@ -286,6 +286,18 @@ struct ResetTests {
         #expect(odd?.resets(now: now) == LimitResets(available: 1, usable: false))
     }
 
+    @Test func resetGrantsSumOverflowsInt() {
+        let raw: [String: Any] = [
+            "eligible": true,
+            "next_grant_id": "g1",
+            "grants": [
+                ["id": "g1", "resets_left": 1e20, "clears": ["five_hour"]],
+                ["id": "g2", "resets_left": 1e20, "clears": ["seven_day"]],
+            ],
+        ]
+        #expect(ResetGrants(raw)?.resets(now: now) == LimitResets(available: .max, refills: ["session"], usable: true))
+    }
+
     @Test func claudeReadsWhatAUseCameTo() {
         func outcome(_ response: HTTP.Response?) -> (ResetOutcome, Bool) {
             let result = AnthropicUsage.resetOutcome(response, renew: "Run `claude`.", now: now)
