@@ -39,7 +39,11 @@ public actor OpenCodeSource: UsageSource {
     public func save() {}
 
     private func databasePaths() -> [String] {
-        if let override = URL.environment("OPENCODE_DB") { return [override.path] }
+        if let raw = ProcessInfo.processInfo.environment["OPENCODE_DB"], !raw.isEmpty, raw != ":memory:" {
+            let expanded = (raw as NSString).expandingTildeInPath
+            let url = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : root.appendingPathComponent(expanded)
+            return [url.standardizedFileURL.path]
+        }
         let names = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
         return names.filter { $0.hasPrefix("opencode") && $0.hasSuffix(".db") }.sorted().map { root.path + "/" + $0 }
     }

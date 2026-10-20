@@ -352,6 +352,37 @@ struct ProviderTests {
         #expect(second.usage.count == 2)
     }
 
+    @Test func openCodeResolvesRelativeDatabaseOverrideAndIgnoresMemory() async throws {
+        defer { unsetenv("OPENCODE_DB") }
+        let home = try TempProjects()
+        let other = try TempProjects()
+        func writeDatabase(at url: URL, input: Int) {
+            var db: OpaquePointer?
+            #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+            defer { sqlite3_close(db) }
+            func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+            run("CREATE TABLE session (id TEXT, parent_id TEXT, time_created INTEGER)")
+            run("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+            run("INSERT INTO session VALUES ('s', NULL, 1792317600000)")
+            run(#"INSERT INTO message VALUES ('m', 's', 1792317601000, 1792317601000, '{"role":"assistant","modelID":"gpt-5","tokens":{"input":\#(input),"output":10}}')"#)
+        }
+        writeDatabase(at: home.root.appendingPathComponent("custom.db"), input: 100)
+        writeDatabase(at: other.root.appendingPathComponent("abs.db"), input: 200)
+        writeDatabase(at: home.root.appendingPathComponent(":memory:"), input: 900)
+
+        setenv("OPENCODE_DB", "custom.db", 1)
+        let relative = await OpenCodeSource(root: home.root).refresh()
+        #expect(relative.usage.reduce(0) { $0 + $1.tokens.total } == 110)
+
+        setenv("OPENCODE_DB", other.root.appendingPathComponent("abs.db").path, 1)
+        let absolute = await OpenCodeSource(root: home.root).refresh()
+        #expect(absolute.usage.reduce(0) { $0 + $1.tokens.total } == 210)
+
+        setenv("OPENCODE_DB", ":memory:", 1)
+        let memory = await OpenCodeSource(root: home.root).refresh()
+        #expect(memory.usage.isEmpty)
+    }
+
     @Test func protobufFieldsAndTimestamps() throws {
         // field 1 (message) { field 1: 1792323955, field 2: 500_000_000 }, field 2: varint 150, field 3: "hi"
         let bytes: [UInt8] = [0x0A, 0x0C, 0x08, 0xF3, 0xE2, 0xD2, 0xD6, 0x06, 0x10, 0x80, 0xCA, 0xB5, 0xEE, 0x01, 0x10, 0x96, 0x01, 0x1A, 0x02, 0x68, 0x69]
