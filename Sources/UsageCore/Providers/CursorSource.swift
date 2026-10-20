@@ -27,8 +27,10 @@ public actor CursorSource: UsageSource {
     public nonisolated var watchedPaths: [String] { [chatsURL.path, ideStateURL.deletingLastPathComponent().path] }
 
     public func refresh(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
-        for (relative, _) in TranscriptFolders.files(in: chatsURL, depth: 2, include: { $0 == "store.db" }) {
+        var seen: Set<String> = []
+        for relative in TranscriptFolders.files(in: chatsURL, depth: 2, include: { $0 == "store.db" }).keys.sorted() {
             let path = chatsURL.path + "/" + relative
+            guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else { continue }
             guard let stamp = DatabaseStamp(path: path) else { continue }
             if chats[path]?.stamp == stamp { continue }
             guard let reader = SQLiteReader(path: path),
