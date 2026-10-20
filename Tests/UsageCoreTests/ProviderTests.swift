@@ -221,6 +221,61 @@ struct ProviderTests {
         let time = try #require(message.message(1)?.timestamp)
         #expect(abs(time - 1_792_323_955.5) < 0.001)
     }
+
+    @Test func antigravityBackupSelectsArbitraryUsage() async throws {
+        func varint(_ value: UInt64) -> [UInt8] {
+            var value = value
+            var result: [UInt8] = []
+            repeat {
+                var byte = UInt8(value & 127)
+                value >>= 7
+                if value != 0 { byte |= 128 }
+                result.append(byte)
+            } while value != 0
+            return result
+        }
+        func bytes(_ number: Int, _ content: [UInt8]) -> [UInt8] {
+            varint(UInt64(number * 8 + 2)) + varint(UInt64(content.count)) + content
+        }
+        func number(_ field: Int, _ value: UInt64) -> [UInt8] {
+            varint(UInt64(field * 8)) + varint(value)
+        }
+        func hex(_ value: [UInt8]) -> String { Data(value).hexString }
+
+        let home = try TempProjects()
+        var roots: [URL] = []
+        for (name, output) in [("live", 100), ("backup", 10)] {
+            let folder = home.root.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent("conversations"), withIntermediateDirectories: true)
+            roots.append(folder)
+            var db: OpaquePointer?
+            #expect(sqlite3_open(folder.appendingPathComponent("conversations/c1.db").path, &db) == SQLITE_OK)
+            func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+            run("CREATE TABLE steps (idx INTEGER, step_type INTEGER, metadata BLOB)")
+            run("CREATE TABLE gen_metadata (idx INTEGER, data BLOB)")
+            run("INSERT INTO steps VALUES (0, 15, X'\(hex(bytes(1, number(1, 1792317600))))')")
+            let counts = number(2, 1000) + number(3, UInt64(output)) + bytes(11, Array("response1".utf8))
+            let generation = bytes(4, counts) + bytes(19, Array("gemini-3-pro".utf8))
+            run("INSERT INTO gen_metadata VALUES (0, X'\(hex(bytes(1, generation)))')")
+            sqlite3_close(db)
+        }
+        var seen: Set<Int64> = []
+        let source = AntigravitySource(roots: roots)
+        for phase in 0..<2 {
+            for (index, root) in roots.enumerated() {
+                let output = index == phase ? 100 : 10
+                let counts = number(2, 1000) + number(3, UInt64(output)) + bytes(11, Array("response1".utf8))
+                let generation = bytes(4, counts) + bytes(19, Array("gemini-3-pro".utf8))
+                var db: OpaquePointer?
+                #expect(sqlite3_open(root.appendingPathComponent("conversations/c1.db").path, &db) == SQLITE_OK)
+                #expect(sqlite3_exec(db, "UPDATE gen_metadata SET data = X'\(hex(bytes(1, generation)))'", nil, nil, nil) == SQLITE_OK)
+                sqlite3_close(db)
+            }
+            let data = await source.refresh()
+            if let output = data.usage.first?.tokens.output { seen.insert(output) }
+        }
+        #expect(seen == [100])
+    }
 }
 
 extension ProviderTests {

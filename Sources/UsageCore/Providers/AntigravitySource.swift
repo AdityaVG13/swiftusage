@@ -51,10 +51,11 @@ public actor AntigravitySource: UsageSource {
         var starts: [String: Double] = [:]
         var messages: [UInt64: Int32] = [:]
         var usage: [UInt64: UsageRecord] = [:]
-        for conversation in conversations.values {
+        for path in conversations.keys.sorted() {
+            guard let conversation = conversations[path] else { continue }
             if let start = conversation.start { starts[conversation.id] = min(starts[conversation.id] ?? start, start) }
             messages.merge(conversation.messages) { kept, _ in kept }
-            usage.merge(conversation.usage) { kept, _ in kept }
+            usage.merge(conversation.usage) { kept, candidate in kept.tokens.total >= candidate.tokens.total ? kept : candidate }
         }
         var data = UsageData()
         data.transcriptCount = starts.count
