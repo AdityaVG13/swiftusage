@@ -286,20 +286,37 @@ private struct MenuBarPreview: View {
     let content: MenuBarContent
     /// Takes the accounts in their new order.
     let onReorder: ([String]) -> Void
+    /// Accounts the legend lists before it scrolls.
+    private static let legendRows = 6
 
     var body: some View {
         let groups = content.groups
         VStack(spacing: 12) {
-            MenuBarReplica(content: content, onReorder: onReorder)
-                .padding(.horizontal, 16)
-                .frame(height: 40)
-                .background(Capsule().fill(.black.opacity(0.3)))
-                .overlay(Capsule().strokeBorder(.white.opacity(0.07)))
-            VStack(alignment: .leading, spacing: 5) {
+            ViewThatFits(in: .horizontal) {
+                MenuBarReplica(content: content, onReorder: onReorder)
+                    .padding(.horizontal, 16)
+                // Wider than the panel with many accounts pinned: it scrolls sideways, and an account
+                // dragged past the edge still reaches the end of the strip.
+                ScrollView(.horizontal) {
+                    MenuBarReplica(content: content, onReorder: onReorder)
+                        .padding(.horizontal, 16)
+                }
+                .scrollIndicators(.never)
+                .clipShape(Capsule())
+            }
+            .frame(height: 40)
+            .background(Capsule().fill(.black.opacity(0.3)))
+            .overlay(Capsule().strokeBorder(.white.opacity(0.07)))
+            let list = VStack(alignment: .leading, spacing: 5) {
                 legend(groups)
             }
             .font(.system(size: 11.5))
             .lineLimit(1)
+            if groups.count > Self.legendRows {
+                CappedScrollView(maxHeight: CGFloat(Self.legendRows) * 21) { list }
+            } else {
+                list
+            }
         }
         .padding(.vertical, 16)
         .padding(.horizontal, Theme.Layout.modulePadding)
