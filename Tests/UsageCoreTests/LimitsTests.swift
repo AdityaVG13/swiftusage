@@ -362,6 +362,29 @@ struct LimitsTests {
         #expect(rejected.problem == "Login expired. Open Antigravity or run `agy` to sign in again.")
     }
 
+    @Test func revokedAntigravityRefreshTokenIsNotRetried() async {
+        let calls = Mutex(0)
+        let source = AntigravityLimits()
+        let revoked = AntigravityLimits.Login(access: "fixture-access", refresh: "fixture-revoked", expires: .distantFuture)
+        for _ in 0..<3 {
+            let session = await source.session(for: revoked) { _ in
+                calls.withLock { $0 += 1 }
+                return .rejected
+            }
+            #expect(session.token == nil)
+            #expect(session.problem == "Login expired. Open Antigravity or run `agy` to sign in again.")
+        }
+        #expect(calls.withLock { $0 } == 1)
+
+        let fresh = AntigravityLimits.Login(refresh: "fixture-fresh")
+        let renewed = await source.session(for: fresh) { _ in
+            calls.withLock { $0 += 1 }
+            return .renewed("fresh-token", .distantFuture, "user@example.com")
+        }
+        #expect(renewed.token == "fresh-token")
+        #expect(calls.withLock { $0 } == 2)
+    }
+
     @Test func piReadsItsSubscriptionLogins() {
         let auth = object("""
             {"anthropic":{"type":"oauth","access":"sk-ant-oat","refresh":"r","expires":1792500000000},

@@ -30,6 +30,7 @@ public actor AntigravityLimits: LimitsSource {
 
     /// Renewed access tokens, by the refresh token they came from.
     private var renewed: [String: (token: String, expires: Date, email: String?)] = [:]
+    private var rejected: Set<String> = []
     private var plans: [String: String] = [:]
     private var weeklyResets: Set<Date> = []
 
@@ -100,6 +101,9 @@ public actor AntigravityLimits: LimitsSource {
         guard let refresh = login.refresh else {
             return own.map { Session(token: $0) } ?? Session(problem: "Login expired. \(Self.renew)")
         }
+        if rejected.contains(refresh.sha256Prefix) {
+            return Session(email: renewed[refresh]?.email, problem: "Login expired. \(Self.renew)")
+        }
         if let cached = renewed[refresh], cached.expires > soon { return Session(token: cached.token, email: cached.email) }
         let outcome: Renewal = if let renew { await renew(refresh) } else { await renewToken(refresh) }
         switch outcome {
@@ -108,6 +112,7 @@ public actor AntigravityLimits: LimitsSource {
             renewed[refresh] = (token, expires, email)
             return Session(token: token, email: email)
         case .rejected:
+            rejected.insert(refresh.sha256Prefix)
             return Session(email: renewed[refresh]?.email, problem: "Login expired. \(Self.renew)")
         case .unavailable:
             return own.map { Session(token: $0, email: renewed[refresh]?.email) } ?? Session(email: renewed[refresh]?.email, problem: "Couldn't reach Google.")
