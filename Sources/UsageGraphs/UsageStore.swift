@@ -30,6 +30,7 @@ final class UsageStore {
     @ObservationIgnored private var prices = PriceList.bundled
     /// Counts stats builds, so one that finishes after a newer one is dropped.
     @ObservationIgnored private var generation = 0
+    @ObservationIgnored private var applyGeneration = 0
     /// The local day the stats were last built on; they're rebuilt on a new day even if no history changed.
     @ObservationIgnored private var statsDay: Int?
 
@@ -176,11 +177,14 @@ final class UsageStore {
     }
 
     private func apply(rebuildingStats: Bool = true) async {
+        applyGeneration += 1
+        let applyID = applyGeneration
         let snapshot = data
         let today = DayClock().day(of: Date().timeIntervalSince1970)
         if rebuildingStats || today != statsDay {
             statsDay = today
             await buildStats(snapshot)
+            guard applyID == applyGeneration else { return }
         }
         let withData = Set(snapshot.filter { !$0.value.isEmpty }.map(\.key))
         if withData != providersWithData { providersWithData = withData }
