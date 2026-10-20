@@ -11,12 +11,27 @@ public enum PiTranscripts: TranscriptFormat {
     public static let upgradableCacheVersion = 1
 
     public static var defaultRoot: URL {
-        if let sessions = URL.environment("PI_CODING_AGENT_SESSION_DIR") { return sessions }
-        return (URL.environment("PI_CODING_AGENT_DIR") ?? .home.appendingPathComponent(".pi/agent")).appendingPathComponent("sessions")
+        if let sessions = URL.environment("PI_CODING_AGENT_SESSION_DIR") {
+            _ = EnvironmentFolders.seen("PI_CODING_AGENT_SESSION_DIR")
+            return sessions
+        }
+        if let agent = URL.environment("PI_CODING_AGENT_DIR") {
+            return agent.appendingPathComponent("sessions")
+        }
+        if let remembered = EnvironmentFolders.seen("PI_CODING_AGENT_SESSION_DIR").first {
+            return URL(fileURLWithPath: (remembered as NSString).expandingTildeInPath)
+        }
+        return URL.home.appendingPathComponent(".pi/agent/sessions")
     }
 
     public static func discover(in root: URL) -> [String: TranscriptInfo] {
-        TranscriptFolders.files(in: root, depth: 1) { $0.hasSuffix(".jsonl") }
+        var found = TranscriptFolders.files(in: root, depth: 1) { $0.hasSuffix(".jsonl") }
+        let sessionDirs = EnvironmentFolders.seen("PI_CODING_AGENT_SESSION_DIR")
+            .map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath).standardizedFileURL.path }
+        if sessionDirs.contains(root.standardizedFileURL.path) {
+            found.merge(TranscriptFolders.files(in: root, depth: 0) { $0.hasSuffix(".jsonl") }) { kept, _ in kept }
+        }
+        return found
     }
 
     public static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool {

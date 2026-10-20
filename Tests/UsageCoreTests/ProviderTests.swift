@@ -141,6 +141,34 @@ struct ProviderTests {
         #expect(stats.models.map(\.name) == ["Sonnet 5"])
     }
 
+    @Test func piExplicitSessionFolderReadsTopLevelFiles() async throws {
+        defer {
+            unsetenv("PI_CODING_AGENT_SESSION_DIR")
+            UserDefaults.standard.removeObject(forKey: "environmentFolders.PI_CODING_AGENT_SESSION_DIR")
+        }
+        let explicit = try TempProjects()
+        let defaultLayout = try TempProjects()
+        let line = json(["type": "message", "id": "a1", "timestamp": "2026-10-18T10:00:02Z",
+                         "message": ["role": "assistant", "model": "gpt-5.6", "timestamp": Timestamp.parse("2026-10-18T10:00:02Z")! * 1000,
+                                     "usage": ["input": 1000, "output": 100, "cacheRead": 0, "cacheWrite": 0]]])
+        try explicit.write("s.jsonl", [line])
+        try defaultLayout.write("s.jsonl", [line])
+        try defaultLayout.write("nested/n.jsonl", [line])
+
+        setenv("PI_CODING_AGENT_SESSION_DIR", explicit.root.path, 1)
+        let current = await TranscriptIndex<PiTranscripts>(root: PiTranscripts.defaultRoot, cacheURL: nil).refresh()
+        #expect(current.usage.reduce(0) { $0 + $1.tokens.total } == 1100)
+
+        // Still recognized after the environment variable is gone.
+        unsetenv("PI_CODING_AGENT_SESSION_DIR")
+        let remembered = await TranscriptIndex<PiTranscripts>(root: explicit.root, cacheURL: nil).refresh()
+        #expect(remembered.usage.reduce(0) { $0 + $1.tokens.total } == 1100)
+
+        // The default sessions folder only reads one level down.
+        let defaultData = await TranscriptIndex<PiTranscripts>(root: defaultLayout.root, cacheURL: nil).refresh()
+        #expect(defaultData.transcriptCount == 1)
+    }
+
     // MARK: Grok
 
     @Test func grokSplitsCachedInputAndCountsPrompts() async throws {
