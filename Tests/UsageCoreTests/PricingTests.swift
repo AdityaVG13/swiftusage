@@ -50,6 +50,15 @@ struct PricingTests {
         #expect(prices.price(for: "grok-4.6", speed: .fast) == prices.price(for: "grok-4.6"))
     }
 
+    @Test func reviewRefreshedFastPricesWinOverBundledSupplement() throws {
+        let newPrice = ModelPrice(base: .init(input: 6, output: 30, cacheRead: 0.3, cacheWrite: 7.5, cacheWriteHour: 12), fast: 2)
+        let updated = PriceList.bundled.replacingPrices(["claude-opus-5-5": newPrice])
+        let standard = try #require(updated.price(for: "claude-opus-5-5"))
+        let fast = try #require(updated.price(for: "claude-opus-5-5", speed: .fast))
+        #expect(standard.base.input == 6)
+        #expect(fast.base.input == 12)
+    }
+
     @Test func namesResolveAcrossToolSpellings() {
         let opus = prices.price(for: "claude-opus-5-5")
         #expect(opus != nil)

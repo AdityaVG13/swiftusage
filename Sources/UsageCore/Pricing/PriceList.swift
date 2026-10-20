@@ -126,10 +126,16 @@ public struct PriceList: Sendable {
         }
         for base in bases(name) {
             for candidate in trimmed(alias(base) ?? base) {
-                // Some fast modes are listed as models of their own.
-                if speed != .standard, let fast = lookup(candidate + "-fast") { return fast }
+                let key = Self.key(candidate)
+                if speed != .standard {
+                    // Some fast modes are listed as models of their own.
+                    let fastKey = Self.key(candidate + "-fast")
+                    if let fast = prices[fastKey] { return fast }
+                    if let price = prices[key], price.fast != nil { return price.at(speed) }
+                    if let fast = supplement[fastKey] { return fast }
+                }
                 if var price = lookup(candidate) {
-                    price.fast = price.fast ?? fastMultipliers[Self.key(candidate)]
+                    price.fast = price.fast ?? fastMultipliers[key]
                     return price.at(speed)
                 }
             }
