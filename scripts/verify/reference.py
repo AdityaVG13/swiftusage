@@ -81,11 +81,11 @@ for name, n in (('All', None), ('30d', 30), ('7d', 7)):
     ss = [s for s in sessions if inr(local_day(s))]
     h = collections.Counter(datetime.datetime.fromtimestamp(s).hour for s in ss)
     msgs = [b for b in msg_bucket.values() if inr(local_day(b * 900))]
+    active = {local_day(b * 900) for b in msgs} | {local_day(s) for s in ss}
     per = collections.Counter(); total = 0
     for b, model, tok in resp.values():
         if model == '<synthetic>' or sum(tok) == 0 or not inr(local_day(b * 900)): continue
-        per[model] += sum(tok); total += sum(tok)
-    active = {local_day(b * 900) for b in msgs} | {local_day(s) for s in ss}
+        per[model] += sum(tok); total += sum(tok); active.add(local_day(b * 900))
     peak = min((x for x in h if h[x] == max(h.values())), default=None)
     fav = min((m for m in per if per[m] == max(per.values())), default=None)
     ranges[name] = dict(sessions=len(ss), messages=len(msgs), totalTokens=total, activeDays=len(active), peakHour=peak, favoriteModel=fav)

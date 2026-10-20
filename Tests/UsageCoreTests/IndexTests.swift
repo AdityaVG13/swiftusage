@@ -218,6 +218,13 @@ struct IndexTests {
         #expect(counts == [5, 4, 2])
     }
 
+    @Test func reviewTokensOnlyDayIsActive() {
+        var data = UsageData()
+        data.usage = [UsageRecord(bucket: FileRecord.bucket(Timestamp.parse("2026-10-18T10:00:00Z")!), model: "claude-opus-5-5", tokens: TokenCounts(output: 100))]
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.activeDays == 1)
+    }
+
     @Test func unreadableFilesKeepTheirSummary() async throws {
         let projects = try TempProjects()
         let url = try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_1")])

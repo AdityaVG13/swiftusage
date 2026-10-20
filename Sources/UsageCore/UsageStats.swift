@@ -24,7 +24,7 @@ public struct DayStats: Sendable, Equatable {
     /// Dollars at API rates for the tokens whose model has a known price.
     public var cost: Double = 0
 
-    public var isActive: Bool { messages > 0 || sessions > 0 }
+    public var isActive: Bool { messages > 0 || sessions > 0 || tokens > 0 }
 }
 
 public struct ModelStats: Sendable, Identifiable, Equatable {
