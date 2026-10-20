@@ -1,0 +1,373 @@
+import Foundation
+
+/// Raw usage across every transcript, independent of time zone and date range.
+public struct UsageData: Sendable {
+    public var sessionStarts: [Double] = []
+    /// Quarter-hour bucket → main-thread messages.
+    public var messageBuckets: [Int32: Int] = [:]
+    /// One record per model response, deduplicated across all transcripts.
+    public var usage: [UsageRecord] = []
+    public var transcriptCount = 0
+    public var scannedAt = Date()
+
+    public init() {}
+
+    public var isEmpty: Bool { sessionStarts.isEmpty && usage.isEmpty && messageBuckets.isEmpty }
+
+    /// Several providers' usage as one.
+    public static func merged(_ parts: [UsageData]) -> UsageData {
+        var data = UsageData()
+        for part in parts {
+            data.sessionStarts += part.sessionStarts
+            data.messageBuckets.merge(part.messageBuckets, uniquingKeysWith: +)
+            data.usage += part.usage
+            data.transcriptCount += part.transcriptCount
+        }
+        data.scannedAt = parts.map(\.scannedAt).max() ?? Date()
+        return data
+    }
+}
+
+public struct ScanProgress: Sendable {
+    public var bytesRead: Int64
+    public var bytesTotal: Int64
+    public var filesDone: Int
+    public var filesTotal: Int
+
+    public init(bytesRead: Int64, bytesTotal: Int64, filesDone: Int, filesTotal: Int) {
+        self.bytesRead = bytesRead
+        self.bytesTotal = bytesTotal
+        self.filesDone = filesDone
+        self.filesTotal = filesTotal
+    }
+
+    public var fraction: Double { bytesTotal > 0 ? Double(bytesRead) / Double(bytesTotal) : 0 }
+}
+
+/// Where one provider's usage comes from. Each source keeps its own state and is refreshed on its own.
+public protocol UsageSource: Actor {
+    nonisolated var provider: Provider { get }
+    /// Folders whose changes mean there may be new usage. Missing ones are skipped.
+    nonisolated var watchedPaths: [String] { get }
+    /// Brings the source up to date and returns everything it knows.
+    func refresh(progress: (@Sendable (ScanProgress) -> Void)?) async -> UsageData
+    /// Forgets saved state and reads everything again.
+    func rebuild(progress: (@Sendable (ScanProgress) -> Void)?) async -> UsageData
+    /// Writes saved state to disk, if the source keeps any.
+    func save()
+}
+
+public struct TranscriptInfo: Sendable {
+    public var path: String
+    public var size: UInt64
+    var modified: Double
+    var inode: UInt64
+    var isSubagent: Bool
+
+    /// Stats `path`; nil unless it's a regular file.
+    static func of(_ path: String, isSubagent: Bool = false) -> TranscriptInfo? {
+        var st = stat()
+        guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+        let modified = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
+        return TranscriptInfo(path: path, size: UInt64(st.st_size), modified: modified, inode: UInt64(st.st_ino), isSubagent: isSubagent)
+    }
+}
+
+/// How one tool lays out and writes its append-only JSONL transcripts.
+public protocol TranscriptFormat: Sendable {
+    static var provider: Provider { get }
+    /// Name of the saved index in the app's cache folder.
+    static var cacheName: String { get }
+    /// Bumped when `ingest` changes what it records, so old saved indexes are read again.
+    static var cacheVersion: Int { get }
+    /// The oldest saved index that can be upgraded rather than discarded: its transcripts still on disk
+    /// are read again, and its summaries of deleted ones carry over.
+    static var upgradableCacheVersion: Int { get }
+    /// Every transcript under `root`, keyed by path relative to it.
+    static func discover(in root: URL) -> [String: TranscriptInfo]
+    /// Folds one line into its transcript's record. Returns false for a line that isn't a whole JSON
+    /// object, which at the end of a file means it's still being written.
+    static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool
+    /// Folders to watch for changes, if not all of `root`.
+    static func watchedPaths(root: URL) -> [String]
+    /// Whether a last line without a newline is read when it parses. Formats that skip lines without
+    /// parsing them can't tell a finished line from a half-written one, so they wait for the newline.
+    static var readsUnterminatedLastLine: Bool { get }
+}
+
+extension TranscriptFormat {
+    public static var upgradableCacheVersion: Int { cacheVersion }
+    public static var readsUnterminatedLastLine: Bool { false }
+    public static func watchedPaths(root: URL) -> [String] { [root.path] }
+}
+
+/// Keeps a per-transcript summary of one tool's transcripts, re-reading only bytes appended since the
+/// last scan, and persists it so a relaunch doesn't have to read gigabytes of history again.
+public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
+    /// Saving re-encodes the whole index, so during heavy use it's batched. Losing unsaved progress
+    /// only means re-reading the bytes appended since the last save.
+    private static var saveInterval: TimeInterval { 300 }
+
+    public nonisolated let root: URL
+    private let cacheURL: URL?
+    private var records: [String: FileRecord] = [:]
+    private var loadedCache = false
+    /// Set when the saved index is from an older version: the next scan reads every transcript still on
+    /// disk again and keeps the summaries of the rest.
+    private var upgrading = false
+    /// Set when the saved index belongs to a newer build or another folder: it's left untouched.
+    private var savingDisabled = false
+    private var dirty = false
+    private var lastSave = Date.distantPast
+    private var inFlight: Task<UsageData, Never>?
+    private var rerunRequested = false
+    /// The last aggregate, reused while no transcript changes.
+    private var aggregated: UsageData?
+
+    public init(root: URL, cacheURL: URL?) {
+        self.root = root
+        self.cacheURL = cacheURL
+    }
+
+    public static var defaultCacheURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("dev.tasteskill.UsageGraphs/" + Format.cacheName)
+    }
+
+    public nonisolated var provider: Provider { Format.provider }
+    public nonisolated var watchedPaths: [String] { Format.watchedPaths(root: root) }
+
+    /// Brings the index up to date and returns the aggregate. Concurrent callers share one scan;
+    /// a call that arrives mid-scan schedules one more pass so late changes aren't missed.
+    public func refresh(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
+        if let inFlight {
+            rerunRequested = true
+            return await inFlight.value
+        }
+        let task = Task { await self.scanUntilSettled(progress: progress) }
+        inFlight = task
+        let data = await task.value
+        inFlight = nil
+        return data
+    }
+
+    /// Drops the index and reads every transcript from scratch.
+    public func rebuild(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
+        if let inFlight { _ = await inFlight.value }
+        records = [:]
+        aggregated = nil
+        loadedCache = true
+        dirty = true
+        return await refresh(progress: progress)
+    }
+
+    public func save() {
+        guard dirty, !savingDisabled, let cacheURL else { return }
+        let file = CacheFile(version: Format.cacheVersion, root: root.path, records: records)
+        do {
+            try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(file).write(to: cacheURL, options: .atomic)
+            dirty = false
+            lastSave = Date()
+        } catch {
+            NSLog("swiftusage: could not save \(Format.cacheName): \(error)")
+        }
+    }
+
+    private func scanUntilSettled(progress: (@Sendable (ScanProgress) -> Void)?) async -> UsageData {
+        var data = await scan(progress: progress)
+        while rerunRequested {
+            rerunRequested = false
+            data = await scan(progress: nil)
+        }
+        return data
+    }
+
+    private func scan(progress: (@Sendable (ScanProgress) -> Void)?) async -> UsageData {
+        if !loadedCache { loadCache() }
+
+        let found = Format.discover(in: root)
+        // Upgrading reads every transcript still on disk from the start. Their old summaries stay until
+        // the new ones are read, so a file that can't be read keeps what it had.
+        let rereading = upgrading ? Set(found.keys) : []
+        upgrading = false
+        var jobs: [Job] = []
+        var changed = false
+        for (key, info) in found {
+            if records[key]?.missingSince != nil {
+                records[key]?.missingSince = nil
+                changed = true
+            }
+            if !rereading.contains(key), let record = records[key], record.size == info.size, record.modified == info.modified, record.inode == info.inode {
+                continue
+            }
+            var record = rereading.contains(key) ? FileRecord(isSubagent: info.isSubagent) : records[key] ?? FileRecord(isSubagent: info.isSubagent)
+            // A shrunk, replaced or compressed file can't be resumed from the old offset.
+            if record.inode != info.inode || info.size < record.offset || info.path.hasSuffix(".zst") {
+                record = FileRecord(isSubagent: info.isSubagent)
+            }
+            record.size = info.size
+            record.modified = info.modified
+            record.inode = info.inode
+            jobs.append(Job(key: key, path: info.path, record: record))
+        }
+
+        let now = Date().timeIntervalSince1970
+        for key in records.keys where found[key] == nil && records[key]?.missingSince == nil {
+            records[key]?.missingSince = now
+            changed = true
+        }
+
+        if !jobs.isEmpty {
+            jobs.sort { ($0.record.size - min($0.record.offset, $0.record.size)) > ($1.record.size - min($1.record.offset, $1.record.size)) }
+            let total = jobs.reduce(Int64(0)) { $0 + Int64($1.record.size - min($1.record.offset, $1.record.size)) }
+            var bytesDone: Int64 = 0
+            var filesDone = 0
+            progress?(ScanProgress(bytesRead: 0, bytesTotal: total, filesDone: 0, filesTotal: jobs.count))
+
+            await withTaskGroup(of: (String, FileRecord?, Int64).self) { group in
+                for job in jobs {
+                    group.addTask {
+                        var record = job.record
+                        let start = record.offset
+                        guard TranscriptReader.read(path: job.path, into: &record, unterminated: Format.readsUnterminatedLastLine, ingest: Format.ingest) else { return (job.key, nil, 0) }
+                        return (job.key, record, Int64(record.offset - min(start, record.offset)))
+                    }
+                }
+                for await (key, record, bytes) in group {
+                    // A file that couldn't be read (deleted mid-scan, compressed without zstd) keeps its last
+                    // summary and is tried again next time.
+                    if let record { records[key] = record }
+                    bytesDone += bytes
+                    filesDone += 1
+                    progress?(ScanProgress(bytesRead: min(bytesDone, total), bytesTotal: total, filesDone: filesDone, filesTotal: jobs.count))
+                }
+            }
+        }
+
+        if !jobs.isEmpty || changed {
+            dirty = true
+            aggregated = nil
+            let coldScan = jobs.count > 50
+            if coldScan || Date().timeIntervalSince(lastSave) > Self.saveInterval { save() }
+        }
+        var data = aggregated ?? aggregate(records)
+        aggregated = data
+        data.scannedAt = Date()
+        return data
+    }
+
+    /// Combines per-transcript summaries, counting anything that appears in several transcripts once.
+    func aggregate(_ records: [String: FileRecord]) -> UsageData {
+        var data = UsageData()
+        // Transcripts on disk come first, so an archived copy of a moved file is the one set aside.
+        let ordered = records.keys.sorted { a, b in
+            let aMissing = records[a]?.missingSince != nil, bMissing = records[b]?.missingSince != nil
+            return aMissing != bMissing ? !aMissing : a < b
+        }.compactMap { records[$0] }
+        data.transcriptCount = ordered.count { $0.missingSince == nil }
+
+        // Tokens: one record per response across every transcript, keeping the largest usage seen.
+        var responses: [UInt64: UsageRecord] = [:]
+        for record in ordered {
+            for (id, usage) in record.usage {
+                if let kept = responses[id], kept.tokens.total >= usage.tokens.total { continue }
+                responses[id] = usage
+            }
+        }
+        data.usage = Array(responses.values)
+
+        // Messages: each main-thread entry once, however many transcripts carry a copy of it.
+        let sessions = ordered.filter { !$0.isSubagent }
+        var holders: [UInt64: Int] = [:]
+        var counted = Set<UInt64>()
+        for record in sessions {
+            for (key, bucket) in record.messages {
+                holders[key, default: 0] += 1
+                if counted.insert(key).inserted { data.messageBuckets[bucket, default: 0] += 1 }
+            }
+        }
+
+        // Sessions: a transcript whose every message also lives in a larger transcript (or an
+        // identical one listed earlier) is a copy, such as the original of a continued session or an
+        // archived duplicate, not a session of its own. Forks keep their own messages, so they count.
+        func isCopy(_ position: Int) -> Bool {
+            let messages = sessions[position].messages
+            guard let probe = messages.keys.first, messages.keys.allSatisfy({ holders[$0, default: 0] > 1 }) else { return false }
+            for (other, candidate) in sessions.enumerated() where other != position && candidate.messages[probe] != nil {
+                let larger = candidate.messages.count > messages.count || (candidate.messages.count == messages.count && other < position)
+                if larger, messages.keys.allSatisfy({ candidate.messages[$0] != nil }) { return true }
+            }
+            return false
+        }
+        for (position, record) in sessions.enumerated() {
+            guard let start = record.sessionStart, !isCopy(position) else { continue }
+            data.sessionStarts.append(start)
+        }
+        return data
+    }
+
+    private func loadCache() {
+        loadedCache = true
+        guard let cacheURL, let raw = try? Data(contentsOf: cacheURL) else { return }
+        guard let file = try? JSONDecoder().decode(CacheFile.self, from: raw) else {
+            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
+            let aside = cacheURL.appendingPathExtension("unreadable")
+            try? FileManager.default.removeItem(at: aside)
+            try? FileManager.default.moveItem(at: cacheURL, to: aside)
+            return
+        }
+        // A newer build's index, or one for another folder (a different `CLAUDE_CONFIG_DIR`), isn't this
+        // run's to replace.
+        guard file.root == root.path, file.version <= Format.cacheVersion else {
+            savingDisabled = true
+            return
+        }
+        guard file.version >= Format.upgradableCacheVersion else { return }
+        records = file.records
+        if file.version == Format.cacheVersion {
+            lastSave = Date()
+        } else {
+            upgrading = true
+            dirty = true
+        }
+    }
+
+    private struct Job: Sendable {
+        var key: String
+        var path: String
+        var record: FileRecord
+    }
+
+    private struct CacheFile: Codable {
+        var version: Int
+        var root: String
+        var records: [String: FileRecord]
+    }
+}
+
+/// A file listing helper for formats that keep transcripts a fixed number of folders deep.
+enum TranscriptFolders {
+    /// Every file under `root` exactly `depth` folders down whose name passes `include`, keyed by
+    /// relative path. Hidden entries are skipped.
+    static func files(in root: URL, depth: Int, isSubagent: Bool = false, include: (String) -> Bool) -> [String: TranscriptInfo] {
+        let fm = FileManager.default
+        var found: [String: TranscriptInfo] = [:]
+        func walk(_ relative: String, _ level: Int) {
+            let path = relative.isEmpty ? root.path : root.path + "/" + relative
+            guard let entries = try? fm.contentsOfDirectory(atPath: path) else { return }
+            for entry in entries where !entry.hasPrefix(".") {
+                let child = relative.isEmpty ? entry : relative + "/" + entry
+                if level == depth {
+                    if include(entry), let info = TranscriptInfo.of(root.path + "/" + child, isSubagent: isSubagent) {
+                        found[child] = info
+                    }
+                } else {
+                    walk(child, level + 1)
+                }
+            }
+        }
+        walk("", 0)
+        return found
+    }
+}

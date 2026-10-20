@@ -1,0 +1,85 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo-white.svg">
+    <img alt="SwiftUsage" src="logo.svg" width="420">
+  </picture>
+</p>
+
+<h1 align="center">Brand kit</h1>
+
+<p align="center">SwiftUsage's name, mark, logo, app icon, colors and type, and how to use them.</p>
+
+## Name
+
+**SwiftUsage**: one word with a capital S and a capital U, like SwiftUI. Not swiftusage, Swiftusage, Swift Usage or SWIFTUSAGE. Only the command is lowercase: `swiftusage`.
+
+## Mark
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="mark-white.svg">
+    <img alt="The SwiftUsage mark" src="mark.svg" width="120">
+  </picture>
+</p>
+
+A 3×3 grid of heatmap cells. The filled cells rise left to right like a bar chart, and the empty ones are what's left, like the unused part of a limit. It's the app's two pictures (the activity heatmap and the usage chart) in nine squares.
+
+- On a 120 grid: 32 cells with 12 between them, corners a fifth of a cell (6.4).
+- Filled cells are the ink; empty cells are the ink at 18%. The 16pt menu bar icon raises them to 25% so they still show.
+
+## Logo
+
+The mark, then the name. The mark spans the name from the dot of the i to the bottom of the g, 30% of its height away.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="clear-space-dark.svg">
+  <img alt="The logo inside a dashed box one cell of the mark away from it on every side" src="clear-space-light.svg">
+</picture>
+
+- Keep at least one cell's width clear around the logo.
+- Use the white versions on dark backgrounds rather than inverting the black ones.
+- Don't recolor, outline, stretch, rotate or add effects to the mark or the name.
+
+## App icon
+
+<img alt="The SwiftUsage app icon: the white mark on a black squircle" src="icon.png" width="160">
+
+The white mark on a black squircle, 432 of Apple's 1024 grid. The build draws it with `scripts/make-icon.swift`, and the app draws the menu bar icon in `MenuBarIcon`.
+
+## Color
+
+<img alt="The light palette (white background, black ink, #737373 secondary text, #E5E5E5 hairlines) and the dark one (black background, white ink, #8C8C8C secondary text, #262626 hairlines)" src="palette.svg">
+
+Black and white only. Gray is for secondary text and hairlines, never for the mark or the name.
+
+| | Light | Dark |
+| --- | --- | --- |
+| Background | `#FFFFFF` | `#000000` |
+| Ink | `#000000` | `#FFFFFF` |
+| Secondary text | `#737373` | `#8C8C8C` |
+| Hairline | `#E5E5E5` | `#262626` |
+
+The app's greens, yellows and reds are data colors (heat, pace), not brand colors.
+
+## Type
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="type-dark.svg">
+  <img alt="Type specimen: SwiftUsage in Google Sans Flex Semibold, the tagline in Regular, and the alphabet" src="type-light.svg">
+</picture>
+
+[Google Sans Flex](https://github.com/googlefonts/googlesans-flex) at full roundness (SIL Open Font License, in `fonts/`), the closest open font to the SF Pro Rounded the app sets its numbers in. SF Pro itself can't be used: Apple's license only covers interface mockups, not logos or artwork. The name is set in Semibold (600) at the font's own spacing, with ligatures off so the f and t stay apart, never tracked or split into weights. Taglines and other text are Regular (400).
+
+## Files
+
+| File | Use |
+| --- | --- |
+| `mark.svg`, `mark-white.svg` | The mark alone: avatars, favicons, small spaces |
+| `logo.svg`, `logo-white.svg` | The mark and the name |
+| `icon.png` | The app icon, 1024×1024 |
+| `banner-light.svg`, `banner-dark.svg` | The README's banner, swapped with GitHub's appearance |
+| `social.png` | GitHub's social preview, 1280×640 (Settings → Social preview) |
+| `palette.svg`, `type-*.svg`, `clear-space-*.svg` | The sheets on this page |
+| `fonts/` | Google Sans Flex with its roundness fixed at 100 and cut to Latin (weight and optical size still variable), with its license |
+
+`swift scripts/make-brand.swift` regenerates the SVGs and `social.png` from the fonts here. They carry the letters as outlines, so they show the same without the font installed. `icon.png` is `icon_512x512@2x.png` from `swift scripts/make-icon.swift <folder>.iconset`.

@@ -1,0 +1,349 @@
+import CommonCrypto
+import Foundation
+import Testing
+@testable import UsageCore
+
+struct LimitsTests {
+    let now = Date(timeIntervalSince1970: Timestamp.parse("2026-10-19T16:00:00Z")!)
+
+    private func object(_ json: String) -> [String: Any] {
+        (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
+    }
+
+    // MARK: Providers' answers
+
+    @Test func claudeReadsItsLimitsList() {
+        let body = object("""
+            {"five_hour":{"utilization":100.0,"resets_at":"2026-10-19T19:10:00.399644+00:00"},
+             "seven_day":{"utilization":58.0,"resets_at":"2026-10-23T23:00:00.399669+00:00"},
+             "extra_usage":{"is_enabled":true,"monthly_limit":5000,"used_credits":1234},
+             "limits":[
+               {"kind":"session","group":"session","percent":100,"resets_at":"2026-10-19T19:10:00.399644+00:00","scope":null},
+               {"kind":"weekly_all","group":"weekly","percent":58,"resets_at":"2026-10-23T23:00:00.399669+00:00","scope":null},
+               {"kind":"weekly_scoped","group":"weekly","percent":7,"resets_at":"2026-10-23T23:00:00+00:00","scope":{"model":{"id":null,"display_name":"Fable"}}}]}
+            """)
+        let meters = ClaudeLimits.meters(body)
+        #expect(meters.map(\.id) == ["session", "weekly", "model-fable"])
+        #expect(meters.map(\.label) == ["Session", "Weekly", "Fable"])
+        #expect(meters.map(\.used) == [100, 58, 7])
+        #expect(meters[0].period == TimeInterval(5 * 3600))
+        #expect(meters[2].period == TimeInterval(7 * 86_400))
+        #expect(meters[0].resetsAt == Date(timeIntervalSince1970: Timestamp.parse("2026-10-19T19:10:00.399644Z")!))
+        #expect(ClaudeLimits.notes(body) == [LimitNote(id: "extra", label: "Extra usage", value: "$12.34 of $50.00")])
+
+        // Answers without the list still have the named windows; a session that hasn't begun has no reset.
+        let older = ClaudeLimits.meters(object(#"{"five_hour":{"utilization":0,"resets_at":null},"seven_day":{"utilization":"12","resets_at":"2026-10-23T23:00:00Z"},"seven_day_opus":null}"#))
+        #expect(older.map(\.id) == ["session", "weekly"])
+        #expect(older[0].resetsAt == nil)
+        #expect(older[1].used == 12)
+    }
+
+    @Test func claudePlansAndAccountNames() {
+        #expect(ClaudeLimits.plan("claude_max", "default_claude_max_20x") == "Max 20x")
+        #expect(ClaudeLimits.plan("claude_team", "default_claude_max_5x") == "Team 5x")
+        #expect(ClaudeLimits.plan("pro", "default_claude_ai") == "Pro")
+        #expect(ClaudeLimits.plan(nil, "default_claude_max_5x") == nil)
+        #expect(ClaudeLimits.label(organization: "someone@example.com's Organization", email: "someone@example.com") == "Personal")
+        #expect(ClaudeLimits.label(organization: "Tasteskill", email: "a@b.c") == "Tasteskill")
+        #expect(ClaudeLimits.label(organization: nil, email: "a@b.c") == "a@b.c")
+    }
+
+    @Test func claudeFindsEveryConfigFolderOnce() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        func write(_ relative: String, _ json: String) throws {
+            let url = home.appendingPathComponent(relative)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try json.write(to: url, atomically: true, encoding: .utf8)
+        }
+        let future = Int((now.timeIntervalSince1970 + 3600) * 1000)
+        try write(".claude.json", #"{"oauthAccount":{"accountUuid":"A1","organizationUuid":"O1","organizationName":"Tasteskill","emailAddress":"k@t.dev"}}"#)
+        try write(".claude/projects/.keep", "")
+        try write(".claude_personal/.claude.json", #"{"oauthAccount":{"accountUuid":"A2","organizationUuid":"O2","organizationName":"me@x.com's Organization"}}"#)
+        // The same account under a third folder shows once.
+        try write(".claude-copy/.claude.json", #"{"oauthAccount":{"accountUuid":"A2","organizationUuid":"O2"}}"#)
+        try write(".claude-copy/.credentials.json", #"{"claudeAiOauth":{"accessToken":"copy","expiresAt":\#(future)}}"#)
+        // A folder without a login is skipped.
+        try write(".claude-empty/.claude.json", #"{"oauthAccount":{"accountUuid":"A3"}}"#)
+
+        let personal = "Claude Code-credentials-" + home.appendingPathComponent(".claude_personal").path.sha256Prefix
+        let keychain: [String: String] = [
+            "Claude Code-credentials": #"{"claudeAiOauth":{"accessToken":"default","expiresAt":\#(future),"scopes":["user:inference","user:profile"],"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#,
+            personal: #"{"claudeAiOauth":{"accessToken":"personal","expiresAt":\#(future),"subscriptionType":"max"}}"#,
+        ]
+        let logins = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { service, _ in keychain[service] }
+        #expect(logins.map(\.token) == ["default", "copy", "personal"])
+        #expect(logins.map(\.id) == ["claude:a1|o1", "claude:a2|o2", "claude:a2|o2"])
+        #expect(logins.first?.account == "Tasteskill")
+        #expect(logins.first?.isDefault == true)
+        #expect(logins.last?.account == "Personal")
+    }
+
+    @Test func codexNamesWindowsByLength() {
+        let body = object("""
+            {"plan_type":"pro","email":"a@b.c",
+             "rate_limit":{"primary_window":{"used_percent":10,"limit_window_seconds":18000,"reset_at":1792440000},
+                           "secondary_window":{"used_percent":"20","limit_window_seconds":604800,"reset_after_seconds":3600}},
+             "additional_rate_limits":[{"limit_name":"GPT-5.3-Codex-Spark","rate_limit":{"primary_window":{"used_percent":5,"limit_window_seconds":18000}}},
+                                       {"limit_name":"Other","rate_limit":{"primary_window":{"used_percent":99}}}],
+             "credits":{"has_credits":true,"balance":"250"},
+             "rate_limit_reset_credits":{"available_count":2}}
+            """)
+        let limits = CodexLimits.limits(body, id: "codex:x", account: "a@b.c")
+        #expect(limits.plan == "Pro")
+        #expect(limits.meters.map(\.id) == ["session", "weekly", "spark-session"])
+        #expect(limits.meters.map(\.label) == ["Session", "Weekly", "Spark Session"])
+        #expect(limits.meters[0].resetsAt == Date(timeIntervalSince1970: 1_792_440_000))
+        #expect(limits.notes.map(\.value) == ["250"])
+        #expect(limits.resets == LimitResets(available: 2, refills: ["session", "weekly"]))
+        // Free plans have one 30-day window.
+        let free = CodexLimits.limits(object(#"{"plan_type":"free","rate_limit":{"primary_window":{"used_percent":0,"limit_window_seconds":2592000,"reset_at":1795016862},"secondary_window":null}}"#), id: "c", account: nil)
+        #expect(free.meters.map(\.label) == ["Monthly"])
+        #expect(CodexLimits.plan("team_plus") == "Team Plus")
+    }
+
+    @Test func devinReportsWhatsLeft() {
+        let status = object("""
+            {"planInfo":{"planName":"Max","hideDailyQuota":true},"dailyQuotaRemainingPercent":100,"weeklyQuotaRemainingPercent":94,
+             "overageBalanceMicros":"-1114817","dailyQuotaResetAtUnix":"1792483200","weeklyQuotaResetAtUnix":"1792915200"}
+            """)
+        let limits = DevinLimits.limits(status, id: "devin:x")
+        #expect(limits.plan == "Max")
+        #expect(limits.meters.map(\.id) == ["weekly"])
+        #expect(limits.meters.first?.used == 6)
+        #expect(limits.notes.first?.value == "$0")
+        // A used-up quota leaves its percentage out of the answer.
+        let spent = DevinLimits.limits(object(#"{"planInfo":{},"dailyQuotaResetAtUnix":1792483200,"weeklyQuotaRemainingPercent":50,"weeklyQuotaResetAtUnix":1792915200}"#), id: "d")
+        #expect(spent.meters.map(\.used) == [100, 50])
+    }
+
+    @Test func grokReadsItsWeeklyPool() {
+        let config = object(#"{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-13T16:52:11.0+00:00","end":"2026-10-20T16:52:11.0+00:00"},"onDemandCap":{"val":2500}}"#)
+        let limits = GrokLimits.limits(config, id: "grok:x", account: nil, plan: "SuperGrok Heavy")
+        #expect(limits.meters.map(\.id) == ["weekly"])
+        // Zero values are left out, so no percentage means none used.
+        #expect(limits.meters.first?.used == 0)
+        #expect(limits.meters.first?.period == TimeInterval(7 * 86_400))
+        #expect(limits.notes.first?.value == "$2.50K cap")
+    }
+
+    // MARK: Pace
+
+    private func meter(used: Double, resetIn: TimeInterval?, period: TimeInterval? = 5 * 3600) -> LimitMeter {
+        .percent("session", "Session", used: used, resetsAt: resetIn.map { now.addingTimeInterval($0) }, period: period)
+    }
+
+    @Test func paceJudgesTheWholeWindow() throws {
+        // Half the window gone, a third used: on course for two thirds.
+        let fine = Pace(meter(used: 33, resetIn: 2.5 * 3600), now: now)
+        #expect(fine.verdict == .fine)
+        #expect(abs((fine.atReset ?? 0) - 0.66) < 0.001)
+        #expect(fine.runsOut == nil)
+        // On course for 96%: tight.
+        #expect(Pace(meter(used: 48, resetIn: 2.5 * 3600), now: now).verdict == .tight)
+        // Half used a fifth of the way in: runs out after another 1.5 hours.
+        let over = Pace(meter(used: 50, resetIn: 4 * 3600), now: now)
+        #expect(over.verdict == .over)
+        let runsOut = try #require(over.runsOut)
+        #expect(abs(runsOut.timeIntervalSince(now) - 3600) < 1)
+        #expect(Pace(meter(used: 100, resetIn: 3600), now: now).verdict == .reached)
+        // Too early in the window to project; the level alone is judged.
+        #expect(Pace(meter(used: 30, resetIn: 5 * 3600 - 60), now: now).verdict == .fine)
+        #expect(Pace(meter(used: 85, resetIn: nil, period: nil), now: now).verdict == .tight)
+        #expect(Pace(meter(used: 92, resetIn: nil, period: nil), now: now).verdict == .over)
+    }
+
+    // MARK: Failed readings
+
+    @Test func failedReadingsKeepTheLastValues() {
+        let weekly = LimitMeter.percent("weekly", "Weekly", used: 58, resetsAt: now.addingTimeInterval(-3600), period: 7 * 86_400)
+        let session = LimitMeter.percent("session", "Session", used: 90, resetsAt: now.addingTimeInterval(-60), period: 5 * 3600)
+        let fable = LimitMeter.percent("model-fable", "Fable", used: 3, resetsAt: now.addingTimeInterval(86_400), period: 7 * 86_400)
+        let previous = AccountLimits(id: "claude:a", provider: .claude, plan: "Max 20x", meters: [weekly, session, fable], updated: now.addingTimeInterval(-7200))
+        let failed = AccountLimits.failed("claude:a", .claude, "Couldn't reach Anthropic.")
+
+        let kept = failed.keepingValues(of: previous, now: now)
+        #expect(kept.problem == "Couldn't reach Anthropic.")
+        #expect(kept.plan == "Max 20x")
+        #expect(kept.updated == previous.updated)
+        // The week rolled over into the next; the session waits for the next message.
+        #expect(kept.meters[0].used == 0)
+        #expect(kept.meters[0].resetsAt == weekly.resetsAt!.addingTimeInterval(7 * 86_400))
+        #expect(kept.meters[1].used == 0)
+        #expect(kept.meters[1].resetsAt == nil)
+        #expect(kept.meters[2] == fable)
+
+        // A good reading replaces the old one.
+        let fresh = AccountLimits(id: "claude:a", provider: .claude, meters: [fable])
+        #expect(fresh.keepingValues(of: previous, now: now) == fresh)
+    }
+
+    // MARK: More providers and logins
+
+    @Test func antigravityReadsItsKeychainLogin() throws {
+        let json = #"{"token":{"access_token":"ya29.a","refresh_token":"1//r","expiry":"2026-10-19T17:00:00.5+02:00"}}"#
+        let login = try #require(AntigravityLimits.login("go-keyring-base64:" + Data(json.utf8).base64EncodedString()))
+        #expect(login.access == "ya29.a")
+        #expect(login.refresh == "1//r")
+        #expect(login.expires == Date(timeIntervalSince1970: Timestamp.parse("2026-10-19T15:00:00.5Z")!))
+        #expect(AntigravityLimits.login("Bearer ya29.b")?.access == "ya29.b")
+        #expect(AntigravityLimits.login("  ") == nil)
+    }
+
+    @Test func antigravityFindsTheAppsAndAgysLogins() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-agy-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini"), withIntermediateDirectories: true)
+        try #"{"auth_method":"consumer","token":{"access_token":"cli","refresh_token":"1//cli","expiry":"2026-08-15T14:39:42.77425+02:00","token_type":"Bearer"}}"#
+            .write(to: home.appendingPathComponent(".gemini/jetski-standalone-oauth-token"), atomically: true, encoding: .utf8)
+        let app = "go-keyring-base64:" + Data(#"{"token":{"access_token":"app","refresh_token":"1//app"}}"#.utf8).base64EncodedString()
+        let logins = AntigravityLimits.logins(home: home) { service, account in service == "gemini" && account == "antigravity" ? app : nil }
+        #expect(logins.map(\.refresh) == ["1//app", "1//cli"])
+        #expect(logins.last?.access == "cli")
+        #expect(AntigravityLimits.logins(home: home.appendingPathComponent("nowhere")) { _, _ in nil }.isEmpty)
+    }
+
+    @Test func antigravityPoolsItsQuotas() {
+        // The summary: shared buckets by exact ID, the first answer winning, plus Argon's own week.
+        let first = object(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.75,"resetTime":"2026-10-19T20:00:00Z"},{"bucketId":"gemini-image-5h","remainingFraction":0}]},{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"argon","window":"weekly","remainingFraction":0.5}]}]}"#)
+        let second = object(#"{"groups":[{"displayName":"Claude","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.1},{"bucketId":"3p-weekly","remainingFraction":0.9},{"bucketId":"3p-5h"}]}]}"#)
+        let summary = AntigravityLimits.summaryMeters([first, second])
+        #expect(summary.map(\.id) == ["gemini-5h", "argon-weekly", "3p-weekly"])
+        #expect(summary.map(\.used) == [25, 50, 10])
+
+        // Per-model quotas: the most used model speaks for its pool, the window told by the reset.
+        let models = object("""
+            {"gemini-3-flash":{"displayName":"Gemini 3 Flash","quotaInfo":{"remainingFraction":0.6,"resetTime":"2026-10-19T19:00:00Z"}},
+             "gemini-3.5-flash-low":{"displayName":"Gemini 3.5 Flash (Medium)","quotaInfo":{"remainingFraction":0.2,"resetTime":"2026-10-26T16:00:00Z"}},
+             "gemini-2.5-pro":{"displayName":"Gemini 2.5 Pro","quotaInfo":{"remainingFraction":0.9,"resetTime":"2026-10-19T18:00:00Z"}},
+             "claude-sonnet-4-6":{"displayName":"Claude Sonnet 4.6 (Thinking)","quotaInfo":{"resetTime":"2026-10-26T16:00:00Z"}},
+             "chat_20706":{"isInternal":true,"quotaInfo":{"remainingFraction":0}},
+             "tab_flash_lite_preview":{"quotaInfo":{"remainingFraction":1}},
+             "gemini-4-argon":{"displayName":"Gemini 4 Argon","quotaInfo":{"remainingFraction":0.1}}}
+            """)
+        let pooled = AntigravityLimits.modelMeters(models, now: now)
+        #expect(pooled.map(\.id) == ["gemini-5h", "gemini-weekly", "3p-weekly"])
+        // Zero is left out of the answer, so Sonnet's quota without a fraction is used up.
+        #expect(pooled.map(\.used) == [40, 80, 100])
+        #expect(AntigravityLimits.plan(paid: ["id": "free-tier", "name": "Antigravity Starter Quota"], current: nil) == "Free")
+        #expect(AntigravityLimits.plan(paid: ["name": "Google AI Ultra"], current: nil) == "Ultra")
+    }
+
+    @Test func piReadsItsSubscriptionLogins() {
+        let auth = object("""
+            {"anthropic":{"type":"oauth","access":"sk-ant-oat","refresh":"r","expires":1792500000000},
+             "openai-codex":{"type":"oauth","access":"a.b.c","accountId":"acct-1","refresh":"r","expires":1792500000000},
+             "openai-codex-2":{"type":"oauth","access":"d.e.f","accountId":"acct-2"},
+             "xai":{"type":"oauth","access":"x"},
+             "github-copilot":{"type":"oauth","access":"ghu"},
+             "openrouter":{"type":"api_key","key":"sk-or"}}
+            """)
+        let logins = PiLimits.logins(auth)
+        #expect(logins.map(\.service) == [.claude, .chatGPT, .chatGPT, .xai])
+        #expect(logins.map(\.accountID) == [nil, "acct-1", "acct-2", nil])
+        #expect(logins.first?.expires == Date(timeIntervalSince1970: 1_792_500_000))
+    }
+
+    @Test func claudeDesktopLoginsDecrypt() throws {
+        let password = "desktop-storage-password"
+        let account = "a2"
+        let future = Int(Date().timeIntervalSince1970 * 1000) + 3_600_000
+        let cache: [String: Any] = [
+            // Desktop's own client with both scopes beats a narrower token for the same organization.
+            "acct:A2|9d1c250a-e61b-44d9-88ed-5944d1962f5e:O1:https://api.anthropic.com:user:inference user:profile": ["token": "best", "expiresAt": future, "subscriptionType": "max"],
+            "other-client:O1:https://api.anthropic.com:user:profile": ["token": "narrow", "expiresAt": future],
+            // Another account's, one that can't read limits, an expired one, and a deleted one.
+            "acct:A9|9d1c250a-e61b-44d9-88ed-5944d1962f5e:O2:https://api.anthropic.com:user:inference user:profile": ["token": "theirs", "expiresAt": future],
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e:O3:https://api.anthropic.com:user:inference": ["token": "inference", "expiresAt": future],
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e:O4:https://api.anthropic.com:user:inference user:profile": ["token": "old", "expiresAt": 1000],
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e:O5:https://api.anthropic.com:user:profile": NSNull(),
+        ]
+        let sealed = try Self.seal(JSONSerialization.data(withJSONObject: cache), password: password)
+        #expect(ClaudeDesktop.decrypt(sealed, password: password) == (try JSONSerialization.data(withJSONObject: cache)))
+        // A wrong key fails, or yields bytes that aren't the cache.
+        #expect(ClaudeDesktop.decrypt(sealed, password: "wrong") != (try JSONSerialization.data(withJSONObject: cache)))
+
+        let logins = ClaudeDesktop.logins(config: ["oauth:tokenCacheV2": sealed.base64EncodedString()], key: password, account: account)
+        #expect(logins.map(\.token) == ["best"])
+        #expect(logins.first?.organization == "o1")
+        #expect(logins.first?.subscription == "max")
+    }
+
+    /// Electron's encryption, to make a test cache: `v10` and AES-128-CBC with the PBKDF2 key.
+    private static func seal(_ plain: Data, password: String) throws -> Data {
+        var key = Data(count: kCCKeySizeAES128)
+        let salt = Data("saltysalt".utf8)
+        _ = key.withUnsafeMutableBytes { keyBytes in
+            salt.withUnsafeBytes { saltBytes in
+                CCKeyDerivationPBKDF(CCPBKDFAlgorithm(kCCPBKDF2), password, password.utf8.count, saltBytes.bindMemory(to: UInt8.self).baseAddress, salt.count,
+                                     CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA1), 1003, keyBytes.bindMemory(to: UInt8.self).baseAddress, kCCKeySizeAES128)
+            }
+        }
+        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
+        var cipher = Data(count: plain.count + kCCBlockSizeAES128)
+        var written = 0
+        let status = cipher.withUnsafeMutableBytes { out in
+            plain.withUnsafeBytes { input in
+                key.withUnsafeBytes { k in
+                    iv.withUnsafeBytes { v in
+                        CCCrypt(CCOperation(kCCEncrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionPKCS7Padding), k.baseAddress, kCCKeySizeAES128,
+                                v.baseAddress, input.baseAddress, plain.count, out.baseAddress, out.count, &written)
+                    }
+                }
+            }
+        }
+        try #require(status == kCCSuccess)
+        return Data("v10".utf8) + cipher.prefix(written)
+    }
+
+    @Test func sharedAccountsShowOnce() {
+        let meter = LimitMeter.percent("session", "Session", used: 10, resetsAt: nil, period: nil)
+        let claudeCode = AccountLimits.failed("claude:a|o", .claude, account: "Personal", "Anthropic is limiting requests.")
+        let pi = AccountLimits(id: "claude:a|o", provider: .pi, account: "Claude · Personal", meters: [meter])
+        let codex = AccountLimits(id: "codex:1", provider: .codex, meters: [meter])
+        let piCodex = AccountLimits.failed("codex:1", .pi, "Login expired.")
+
+        let merged = LimitsSources.merged([claudeCode, codex, pi, piCodex])
+        #expect(merged.map(\.id) == ["claude:a|o", "codex:1"])
+        // The card keeps its place and name, and takes the reading that worked.
+        #expect(merged[0].provider == .claude)
+        #expect(merged[0].account == "Personal")
+        #expect(merged[0].meters == [meter])
+        #expect(merged[0].problem == nil)
+        #expect(merged[0].sharedWith == [.pi])
+        #expect(merged[1].meters == [meter])
+        #expect(merged[1].sharedWith == [.pi])
+        #expect(merged[1].isUsed(by: .pi) && merged[1].isUsed(by: .codex) && !merged[1].isUsed(by: .claude))
+
+        // Readings saved before `sharedWith` existed still load.
+        let old = #"{"id":"codex:1","provider":"codex","meters":[],"notes":[],"updated":0}"#
+        #expect((try? JSONDecoder().decode(AccountLimits.self, from: Data(old.utf8)))?.sharedWith == [])
+        #expect((try? JSONDecoder().decode(AccountLimits.self, from: Data(old.utf8)))?.resets == nil)
+    }
+
+    @Test func cursorTeamPlansReadTheDashboard() {
+        let summary = object("""
+            {"billingCycleStart":"2026-10-01T00:00:00.000Z","billingCycleEnd":"2026-11-01T00:00:00.000Z",
+             "individualUsage":{"plan":{"totalPercentUsed":42,"autoPercentUsed":30,"apiPercentUsed":12},"onDemand":{"enabled":false,"used":0,"limit":0}},
+             "teamUsage":{"onDemand":{"enabled":true,"used":1250,"limit":10000}}}
+            """)
+        let requests = object(#"{"gpt-4":{"numRequests":120,"numRequestsTotal":130,"maxRequestUsage":500},"startOfMonth":"2026-10-01T00:00:00.000Z"}"#)
+        let dashboard = CursorLimits.dashboard(summary: summary, requests: requests)
+        #expect(dashboard.meters.map(\.id) == ["total", "auto", "api", "requests", "on-demand"])
+        #expect(dashboard.meters[3].used == 130)
+        #expect(dashboard.meters[3].limit == 500)
+        #expect(dashboard.meters[4].used == 12.5)
+        #expect(dashboard.meters[4].limit == 100)
+        #expect(CursorLimits.dashboard(summary: nil, requests: nil).hasValues == false)
+    }
+
+    @Test func codexFindsEveryHome() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-codex-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        for folder in [".codex", ".codex-work", ".config/codex-team", ".codex-empty"] {
+            try FileManager.default.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+            if folder != ".codex-empty" { try Data("{}".utf8).write(to: home.appendingPathComponent(folder + "/auth.json")) }
+        }
+        #expect(CodexLimits.homes(home: home).map(\.lastPathComponent) == [".codex", ".codex-work", "codex-team"])
+    }
+}

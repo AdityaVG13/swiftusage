@@ -1,0 +1,153 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/banner-dark.svg">
+  <img alt="SwiftUsage: coding agent usage, limits and costs, in your menu bar" src="brand/banner-light.svg">
+</picture>
+
+<p align="center">
+  Codex · Claude Code · Cursor · Grok · OpenCode · Antigravity · Muse Code · Pi · Devin
+</p>
+
+<p align="center">
+  <img alt="The Overview tab for all providers: sessions, messages, tokens and cost over the last 30 days, active days, peak hour, favorite model, and a heatmap of messages per day" src="docs/screenshots/overview.png" width="544">
+</p>
+
+SwiftUsage is a macOS menu bar app that shows your coding agents' usage: sessions, messages, total tokens, what those tokens would cost at API rates, active days, peak hour, favorite model, a GitHub-style activity heatmap, and a per-model breakdown for all time, the last 30 days, or the last 7 days. Pick one provider or see them all together.
+
+Usage history is read locally from each tool's own files and never leaves your Mac. Limits are the exception: they come from each provider's own usage API, signed in with the login its tool already keeps on this Mac (see [Limits](#limits)).
+
+## The panel
+
+### Models
+
+<p align="center">
+  <img alt="The Models tab: tokens per day stacked by model, then each model's tokens, cost and share" src="docs/screenshots/models.png" width="544">
+</p>
+
+The Models tab charts tokens per day, stacked by model, and lists each model's tokens, cost and share of the total. Its footer names any models no price list covers, which the cost leaves out.
+
+### Plan limits
+
+<p align="center">
+  <img alt="The Limits tab: what was spent today, yesterday and over 30 days, then a card per account with its session, weekly and per-model limits, bars colored by pace and reset countdowns; account names are blurred" src="docs/screenshots/limits.png" width="544">
+</p>
+
+The Limits tab shows each signed-in account's plan limits the way [OpenUsage](https://github.com/robinebers/openusage) does: session, weekly and per-model windows with their reset countdowns, bars colored by pace (green while you're on course to finish with room to spare, yellow when it'll be close, red when you'll run out before the reset), balances and credits, and what you spent today, yesterday and over the last 30 days.
+
+### Menu bar
+
+<p align="center">
+  <img alt="The menu bar item: two Claude accounts and Devin, each provider's logo with the percentages of its pinned limits" src="docs/screenshots/menu-bar.png" width="156">
+</p>
+
+Pinned limits sit in the menu bar after today's tokens and cost: each account's provider logo with the percentages of its pinned limits; hover the item to see which account is which. It starts out showing each Claude account's session and weekly limits; change them, or drag an account to another place along the preview, in Customize → Menu Bar. Right-click a limit in the Limits tab to show it in the menu bar.
+
+### Customize
+
+Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left.
+
+### Screenshot Mode
+
+Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, so screenshots show its glass over plain black rather than whatever windows and wallpaper are behind it. The screenshots here were taken with it, with account names blurred afterwards.
+
+## Providers
+
+| Provider | Read from |
+| --- | --- |
+| Codex | `$CODEX_HOME` or `~/.codex`: `sessions/**/rollout-*.jsonl[.zst]` and `archived_sessions/` |
+| Claude Code | `$CLAUDE_CONFIG_DIR` or `~/.claude`: `projects/*/*.jsonl` |
+| Cursor | `~/.cursor/chats/*/*/store.db` (CLI) and Cursor's `state.vscdb` (IDE) |
+| Grok | `$GROK_HOME` or `~/.grok`: `sessions/*/*/updates.jsonl` |
+| OpenCode | `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`: `opencode*.db` |
+| Antigravity | `~/.gemini/antigravity*/conversations/*.db` |
+| Muse Code | `~/.local/share/muse/sessions/**/session.jsonl` |
+| Pi | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`: `sessions/*/*.jsonl` |
+| Devin | `~/.local/share/devin`: `cli/sessions.db` and `cli-next/sessions.db` |
+
+Some history can't be counted:
+
+- **Cursor** keeps token counts on its servers, so only its chats and messages are counted, and its tokens show as "–".
+- **Codex** compresses older rollouts with zstd. macOS can't read zstd, so the app loads Homebrew's `libzstd` when it's there (`brew install zstd`) and otherwise skips those files and says so.
+- **Antigravity** conversations from before its SQLite format are encrypted `.pb` files and are skipped.
+- **Muse Code** wasn't installed when its reader was written, so the reader follows the usage events Muse's SDK reports and hasn't been checked against a real log.
+
+## Limits
+
+Each provider is asked for its limits every five minutes and when the panel opens, with the login its tool already keeps. Logins are only read, never changed, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
+
+| Provider | Login read from | Shows |
+| --- | --- | --- |
+| Codex | `auth.json` in `$CODEX_HOME`, `~/.codex`, `~/.config/codex` and side-by-side homes such as `~/.codex-work` | Session, Weekly (or Monthly on Free), Spark, credits, limit resets |
+| Claude Code | the keychain (`Claude Code-credentials`) or `.credentials.json`, for `~/.claude` and every other config folder such as `~/.claude_personal`; then Claude Desktop's login for an account none of them has | Session, Weekly, per-model weekly (Fable), extra usage, limit resets |
+| Cursor | Cursor's `state.vscdb` | Included usage, Cursor and other models, on-demand; requests for team and enterprise plans |
+| Grok | `~/.grok/auth.json` | Weekly pool, pay-as-you-go cap |
+| OpenCode | OpenCode Go's key in `auth.json` or its database | Session, Weekly, Monthly |
+| Antigravity | the app's and `agy`'s keychain items (`gemini`), and `agy`'s `~/.gemini/jetski-standalone-oauth-token` | Gemini and Claude pools, five-hour and weekly, and Argon's week |
+| Pi | `~/.pi/agent/auth.json` | the Claude, ChatGPT and Grok subscriptions Pi is signed in to |
+| Devin | `~/.local/share/devin/credentials.toml` | Daily and weekly quota, extra usage balance |
+
+Each Claude login is its own card, named after its organization ("Personal" for the one Anthropic makes for each person). An account several tools are signed in to (Pi on your Claude subscription, say) is one card, marked "Also used by Pi". Claude Desktop keeps its login encrypted with a key macOS guards, so its card asks first: Allow Access… shows macOS's prompt once, and "Always Allow" keeps it silent after that. Antigravity's access tokens last an hour; a new one is fetched with the login's refresh token, which Google doesn't rotate, and kept in memory only. The app's login and `agy`'s for the same Google account are one card. Accounts on a paid plan get the summary of their shared pools; others, which Google turns away from that summary, get each model's quota pooled the same way. Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
+
+Codex and Claude hand out limit resets now and then, each of which refills the session and weekly limits at once (the monthly one on ChatGPT Free). The card shows how many an account has and when the next one lapses, and Use a Reset… spends one after you confirm, with the same request the Codex CLI and Claude Code send: Codex's first to lapse, or the Claude grant Anthropic names as next. It's the only request the app makes that changes anything. Each one carries an ID the provider tells repeats apart by, and if its answer gets lost, trying again sends the same ID, so it can't use a second reset.
+
+`swiftusage --limits` prints every account's limits in the terminal (`--provider <id>` for one), and `--limits --json` as JSON for scripts and agents:
+
+```sh
+/Applications/SwiftUsage.app/Contents/MacOS/swiftusage --limits --provider antigravity
+```
+
+## Build and install
+
+Needs Xcode 26 or later (Swift 6.2) and macOS 26 or later.
+
+```sh
+./scripts/build-app.sh            # builds build/SwiftUsage.app
+./scripts/build-app.sh --install  # also copies it to /Applications and launches it
+swift test                        # parser, incremental reading, stats, pricing and limits tests
+```
+
+`swiftusage --dump` prints the panel's numbers for every provider in the terminal (`--provider codex` for one, `--cold` skips the saved indexes):
+
+```sh
+/Applications/SwiftUsage.app/Contents/MacOS/swiftusage --dump --provider claude
+```
+
+## How the numbers are counted
+
+**Cost** is what the tokens would cost at API rates, not what a subscription bills. Each response is priced on its own, from LiteLLM's public [price list](https://github.com/BerriAI/litellm), with OpenUsage's pricing supplement for models the list doesn't carry yet. One-hour cache writes cost more than five-minute ones, a prompt past a model's long-context threshold moves the whole request to the higher rates, and fast modes (Claude Code's fast mode, Codex's priority tier) bill at their multiple. Where a tool logs what each response cost (Grok, Pi, OpenCode), that amount is used instead. Models no list can price, such as local models, are named in the Models tab and left out of the cost. The app ships with a copy of both lists (`./scripts/update-prices.sh` refreshes it) and fetches LiteLLM's list once a day; that request carries nothing about your usage.
+
+The rules below are Claude Code's. The other providers follow them as closely as their history allows: tokens are split into uncached input, output (reasoning included), cache reads and cache writes, whatever each tool calls them; responses copied into forked or continued sessions count once; subagents add tokens but not sessions or messages.
+
+- **Codex**: one response per `token_usage_record`, or else per `token_count` event that isn't a repeat. Forked and subagent rollouts start by replaying their parent's turns, which are recognized by their older turn IDs and skipped.
+- **Grok** logs usage per turn, not per response, so each model call in a turn counts as a reply.
+- **OpenCode** reported reasoning tokens inside or beside output depending on its version and the model's provider; the recorded total tells which.
+- **Pi** and **Antigravity** record usage per response.
+- **Devin** copies messages into new rows as a session's history is rewritten, so each message counts once by its ID. Only prompts you typed count as your messages, not context Devin adds as user messages. Its hidden background sessions add tokens but not sessions.
+- Models are grouped by name, without the reasoning effort tools add to their IDs, so Opus 5.5 is one row whether Claude Code, Devin or OpenCode ran it.
+
+Claude Code:
+
+- **Tokens**: input, output, cache reads and cache writes from every response, subagents included, counted once per response by its `message.id`. Claude Code writes a response once per content block. Earlier lines carry partial output counts, and occasionally extra lines with the usage zeroed are appended, so the largest usage seen for a response is the one counted. Claude Code's own `/stats` adds up every line and shows roughly twice as many tokens.
+- **Messages**: your prompts and tool results (user entries, by `uuid`) plus Claude's replies (by `message.id`) on the main thread. Each counts once, even when Claude Code writes the same entry twice or copies history into a continued or forked session. Claude Code's local `<synthetic>` notices (API errors, interruptions) aren't replies and don't count.
+- **Sessions**: main session transcripts, dated by their first entry. A transcript whose messages all live in a larger one is a copy (for example the original of a continued session) and doesn't count again. A fork that has its own new messages counts as its own session.
+- **Active days / peak hour**: days with any activity, and the hour of day in which most sessions started, both in your local time zone.
+- **Heatmap**: the last 34 weeks, one column per week, shaded by messages per day. Shades follow the quartiles of your active days in view, as on GitHub.
+
+Transcripts don't record everything. Claude Code also keeps a per-session running total, and on finished sessions the transcripts account for about 98.5% of it. The rest is background calls it never writes to the transcript (compaction-style requests and a small Haiku call for titles). That total has no timestamps and gets copied into forks, so it can't be placed on a day and isn't included. The other way round, responses cut off mid-stream appear in transcripts but not in that total. Their input was still processed, so they are counted.
+
+## Checking the numbers
+
+```sh
+./scripts/verify.sh
+```
+
+This checks Claude Code's numbers. It takes an APFS clone of your transcripts (instant, no extra disk space) and compares the app with `scripts/verify/reference.py`, a separate Python implementation of the rules above that fully parses every line. It compares sessions, messages and each model's four token counts per day. It then rebuilds every transcript in random chunks that split lines, refreshing and reloading the saved index along the way, and checks that this matches the reference too.
+
+## How it stays fast
+
+The first scan reads every transcript in parallel (about 30 seconds for 31 GB of Codex rollouts). For Claude Code, a byte-level JSON reader pulls out only the fields it needs and skips large tool results with `memchr`; for the other JSONL formats, lines are checked for a marker before they're parsed. After that, the app keeps a summary of each transcript in `~/Library/Caches/dev.tasteskill.UsageGraphs/` and an FSEvents watcher reads only the bytes appended since the last pass, for only the provider whose files changed. SQLite histories are re-read only when the database or its WAL changes (OpenCode only the rows updated since the last read), opened immutable or read-only so no `-wal`/`-shm` files are left beside another app's database.
+
+Claude Code deletes transcripts after 30 days by default (`cleanupPeriodDays`). The index keeps summaries of deleted transcripts, so "All" keeps counting history that Claude Code no longer has; the same goes for Codex, Grok, Muse Code and Pi. "Re-read All History" in the ⋯ menu discards the indexes and starts again from what's on disk.
+
+## Brand
+
+The name, mark, logo, app icon, colors and type are in the [brand kit](brand/).
