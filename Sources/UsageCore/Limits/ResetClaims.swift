@@ -111,6 +111,7 @@ public actor ResetClaims {
         var settled = answer.settled
         if !repeating, case .notUsed = answer.outcome { settled = true }
         if settled, unsettled[account]?.request == request { unsettled[account] = nil }
+        if repeating, !settled, case .notUsed(let why) = answer.outcome { return .unsure(why) }
         return answer.outcome
     }
 }

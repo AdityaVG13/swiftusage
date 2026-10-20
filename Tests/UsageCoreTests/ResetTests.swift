@@ -115,7 +115,7 @@ struct ResetTests {
         guard case .notUsed = await claims.use("codex:x") else { Issue.record("a turned-down try uses nothing"); return }
         guard case .unsure = await claims.use("codex:x") else { Issue.record("a lost answer isn't known to have used nothing"); return }
         // A repeat turned down doesn't settle the try before it, so the one after sends the same request.
-        guard case .notUsed = await claims.use("codex:x") else { Issue.record("a turned-down repeat uses nothing"); return }
+        guard case .unsure = await claims.use("codex:x") else { Issue.record("a turned-down repeat isn't known to have used nothing"); return }
         #expect(await claims.use("codex:x") == .reset)
 
         let consumes = provider.sent.filter { $0.body != nil }
@@ -124,6 +124,33 @@ struct ResetTests {
         #expect(consumes[1].body?["redeem_request_id"] != consumes[0].body?["redeem_request_id"])
         #expect(consumes[1].body == consumes[2].body)
         #expect(consumes[2].body == consumes[3].body)
+    }
+
+    @Test func unauthorizedRetryMustNotClaimEarlierResetWasUnused() async {
+        let list = answer(200, #"{"credits":[{"id":"a","status":"available","expires_at":"2099-01-01T00:00:00Z"}]}"#)
+        let chatGPT = Provider([list, nil, answer(401), answer(200, #"{"code":"already_redeemed"}"#)])
+        let codexClaims = ResetClaims(send: chatGPT.send)
+        await codexClaims.offer(.chatGPT(token: "tok", accountID: nil, renew: "Run `codex` to renew it."), for: "codex:x")
+
+        #expect(await codexClaims.use("codex:x") == .unsure("ChatGPT didn't answer."))
+        #expect(await codexClaims.use("codex:x") == .unsure("Login expired. Run `codex` to renew it."))
+        #expect(await codexClaims.use("codex:x") == .usedEarlier)
+        let consumes = chatGPT.sent.filter { $0.body != nil }
+        #expect(consumes.count == 3)
+        #expect(consumes[0].body == consumes[1].body)
+        #expect(consumes[1].body == consumes[2].body)
+
+        let organization = "4f2c1f39-6a3e-4d6f-9a51-6f0f2b6f2f10"
+        let anthropic = Provider([nil, answer(401), answer(200, #"{"result":"already_used"}"#)])
+        let claudeClaims = ResetClaims(send: anthropic.send)
+        await claudeClaims.offer(.anthropic(token: "tok", organization: organization, grant: "g1", renew: "Run `claude` to renew it."), for: "claude:a|o")
+
+        #expect(await claudeClaims.use("claude:a|o") == .unsure("Anthropic didn't answer."))
+        #expect(await claudeClaims.use("claude:a|o") == .unsure("Login expired. Run `claude` to renew it."))
+        #expect(await claudeClaims.use("claude:a|o") == .usedEarlier)
+        #expect(anthropic.sent.count == 3)
+        #expect(anthropic.sent[0].body == anthropic.sent[1].body)
+        #expect(anthropic.sent[1].body == anthropic.sent[2].body)
     }
 
     @Test func codexStopsWhenNoResetIsLeft() async {
