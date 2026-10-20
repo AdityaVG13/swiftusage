@@ -498,4 +498,30 @@ extension ProviderTests {
         #expect(database.messages.count == 1)
         #expect(database.messages["a"]?.tokens == TokenCounts(input: 100, output: 50))
     }
+
+    @Test func devinCountsRequestCopiesOnce() async throws {
+        let home = try TempProjects()
+        let folder = home.root.appendingPathComponent("cli")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(folder.appendingPathComponent("sessions.db").path, &db) == SQLITE_OK)
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        let start = Int(Timestamp.parse("2026-10-18T10:00:00Z")!)
+        run("CREATE TABLE sessions (id TEXT PRIMARY KEY, model TEXT, created_at INTEGER, hidden INTEGER)")
+        run("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, created_at INTEGER, chat_message TEXT)")
+        run("INSERT INTO sessions VALUES ('s1', 'gpt-5', \(start), 0)")
+        for output in [10, 40] {
+            let node = #"{"role":"assistant","metadata":{"request_id":"req_1","generation_model":"gpt-5","created_at":"2026-10-18T10:00:05Z","metrics":{"input_tokens":100,"output_tokens":\#(output)}}}"#
+            run("INSERT INTO message_nodes (session_id, created_at, chat_message) VALUES ('s1', \(start), '\(node)')")
+        }
+        let plain = #"{"role":"assistant","metadata":{"request_id":"","generation_model":"gpt-5","created_at":"2026-10-18T10:00:06Z","metrics":{"input_tokens":50,"output_tokens":5}}}"#
+        run("INSERT INTO message_nodes (session_id, created_at, chat_message) VALUES ('s1', \(start), '\(plain)')")
+        sqlite3_close(db)
+
+        let data = await DevinSource(root: home.root).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(data.usage.count == 2)
+        #expect(stats.totalTokens == 140 + 55)
+        #expect(stats.messages == 3)
+    }
 }

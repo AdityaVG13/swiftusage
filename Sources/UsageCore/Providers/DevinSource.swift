@@ -46,9 +46,11 @@ public actor DevinSource: UsageSource {
     private func aggregate() -> UsageData {
         var sessions: [String: Session] = [:]
         var messages: [String: Message] = [:]
+        var usage: [String: Message] = [:]
         for database in databases.values {
             sessions.merge(database.sessions) { kept, _ in kept }
             messages.merge(database.messages) { kept, candidate in kept.tokens.total >= candidate.tokens.total ? kept : candidate }
+            usage.merge(database.usage) { kept, candidate in kept.tokens.total >= candidate.tokens.total ? kept : candidate }
         }
         var data = UsageData()
         data.transcriptCount = sessions.count
@@ -61,9 +63,11 @@ public actor DevinSource: UsageSource {
             if session?.hidden != true, message.counts {
                 data.messageBuckets[bucket, default: 0] += 1
             }
-            if message.tokens.total > 0 {
-                data.usage.append(UsageRecord(bucket: bucket, model: message.model ?? session?.model ?? "unknown", tokens: message.tokens))
-            }
+        }
+        for message in usage.values where message.tokens.total > 0 {
+            let session = sessions[message.session]
+            let bucket = FileRecord.bucket(message.created)
+            data.usage.append(UsageRecord(bucket: bucket, model: message.model ?? session?.model ?? "unknown", tokens: message.tokens))
         }
         data.scannedAt = Date()
         return data
@@ -89,6 +93,7 @@ public actor DevinSource: UsageSource {
         var lastRow: Int64 = 0
         var sessions: [String: Session] = [:]
         var messages: [String: Message] = [:]
+        var usage: [String: Message] = [:]
 
         @discardableResult
         mutating func read(_ db: SQLiteReader) -> Bool {
@@ -115,7 +120,8 @@ public actor DevinSource: UsageSource {
                        json_extract(chat_message, '$.metadata.is_user_input'), json_extract(chat_message, '$.metadata.created_at'),
                        json_extract(chat_message, '$.metadata.generation_model'),
                        json_extract(chat_message, '$.metadata.metrics.input_tokens'), json_extract(chat_message, '$.metadata.metrics.output_tokens'),
-                       json_extract(chat_message, '$.metadata.metrics.cache_read_tokens'), json_extract(chat_message, '$.metadata.metrics.cache_creation_tokens')
+                       json_extract(chat_message, '$.metadata.metrics.cache_read_tokens'), json_extract(chat_message, '$.metadata.metrics.cache_creation_tokens'),
+                       json_extract(chat_message, '$.metadata.request_id')
                 FROM message_nodes
                 WHERE row_id > ? AND (substr(chat_message, 1, 200) LIKE '%"role":"assistant"%' OR substr(chat_message, 1, 200) LIKE '%"role":"user"%')
                 ORDER BY row_id
@@ -133,6 +139,19 @@ public actor DevinSource: UsageSource {
                 } else {
                     tokens = TokenCounts()
                 }
+                let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2))
+                if isAssistant {
+                    let usageKey = row.text(12).flatMap { $0.isEmpty ? nil : "\(session)\u{1F}\($0)" } ?? id
+                    if let existing = next.usage[usageKey] {
+                        if tokens.total > existing.tokens.total {
+                            next.usage[usageKey]?.tokens = tokens
+                            next.usage[usageKey]?.model = row.text(7) ?? existing.model
+                        }
+                    } else if let created {
+                        next.usage[usageKey] = Message(session: session, created: created, counts: true,
+                                                       model: row.text(7), tokens: tokens)
+                    }
+                }
                 if let existing = next.messages[id] {
                     if tokens.total > existing.tokens.total {
                         next.messages[id]?.tokens = tokens
@@ -140,7 +159,7 @@ public actor DevinSource: UsageSource {
                     }
                     return
                 }
-                guard let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2)) else { return }
+                guard let created else { return }
                 next.messages[id] = Message(session: session, created: created, counts: isAssistant || row.int(5) != 0,
                                             model: row.text(7), tokens: tokens)
             }) else { return false }
