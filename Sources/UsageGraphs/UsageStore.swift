@@ -153,7 +153,9 @@ final class UsageStore {
     private func scan(_ providers: Set<Provider>?, _ read: @escaping @Sendable (any UsageSource, (@Sendable (ScanProgress) -> Void)?) async -> UsageData) async {
         let chosen = sources.filter { (providers?.contains($0.provider) ?? true) && preferences.isShown($0.provider) }
         if chosen.isEmpty {
-            await apply(rebuildingStats: true)
+            // With every provider off there's nothing to read, but the panel still has to finish loading.
+            // Changes in a provider that's off land here too, and those rebuild nothing.
+            if !hasLoaded { await apply(rebuildingStats: true) }
             return
         }
         activeScans += 1
