@@ -369,7 +369,9 @@ private struct Footer: View {
         .glassEffect(.regular, in: .capsule)
         // The login item can be turned off in System Settings too.
         .onChange(of: presentation.isPresented) { _, presented in
-            if presented { launchAtLogin = SMAppService.mainApp.status == .enabled }
+            guard presented else { return }
+            launchAtLogin = SMAppService.mainApp.status == .enabled
+            if reloading > 0 { spin() }
         }
     }
 
@@ -402,7 +404,13 @@ private struct Footer: View {
             await work()
             reloading -= 1
         }
-        guard !spinning else { return }
+        spin()
+    }
+
+    /// Turns the refresh arrow while the panel is open. Closing the panel stops it, and opening it again
+    /// before the reloads are done starts it again.
+    private func spin() {
+        guard !spinning, presentation.isPresented else { return }
         spinning = true
         Task {
             // The arrow's spring chases a target stepped a little further round every tenth of a second,
@@ -410,7 +418,9 @@ private struct Footer: View {
             repeat {
                 withAnimation(Theme.Motion.spin) { arrowAngle += 45 }
                 try? await Task.sleep(for: .milliseconds(100))
-            } while reloading > 0 || arrowAngle.truncatingRemainder(dividingBy: 360) != 0
+            } while presentation.isPresented && (reloading > 0 || arrowAngle.truncatingRemainder(dividingBy: 360) != 0)
+            // Stopped mid-turn by the panel closing: upright for the next opening.
+            arrowAngle = (arrowAngle / 360).rounded(.up) * 360
             spinning = false
         }
     }
