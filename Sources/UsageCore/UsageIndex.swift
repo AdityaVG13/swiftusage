@@ -321,17 +321,17 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     private func loadCache() {
         loadedCache = true
         guard let cacheURL, let raw = try? Data(contentsOf: cacheURL) else { return }
-        guard let file = try? JSONDecoder().decode(CacheFile.self, from: raw) else {
-            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
-            let aside = cacheURL.appendingPathExtension("unreadable")
-            try? FileManager.default.removeItem(at: aside)
-            try? FileManager.default.moveItem(at: cacheURL, to: aside)
-            return
-        }
+        let decoder = JSONDecoder()
         // A newer build's index, or one for another folder (a different `CLAUDE_CONFIG_DIR`), isn't this
         // run's to replace.
-        guard file.root == root.path, file.version <= Format.cacheVersion else {
+        if let header = try? decoder.decode(CacheHeader.self, from: raw),
+           header.root != root.path || header.version > Format.cacheVersion {
             savingDisabled = true
+            return
+        }
+        guard let file = try? decoder.decode(CacheFile.self, from: raw) else {
+            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
+            if !savingDisabled { UnreadableFile.setAside(cacheURL) }
             return
         }
         guard file.version >= Format.upgradableCacheVersion else { return }
@@ -350,10 +350,33 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         var record: FileRecord
     }
 
+    private struct CacheHeader: Decodable {
+        var version: Int
+        var root: String
+    }
+
     private struct CacheFile: Codable {
         var version: Int
         var root: String
         var records: [String: FileRecord]
+    }
+}
+
+enum UnreadableFile {
+    /// Moves `url` to `<url>.unreadable-<yyyyMMdd-HHmmss>` (or `-2`, `-3`… if that name is taken), never
+    /// deleting or overwriting an earlier set-aside copy.
+    static func setAside(_ url: URL, now: Date = Date()) {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let base = "unreadable-" + formatter.string(from: now)
+        let fm = FileManager.default
+        for attempt in 1...1000 {
+            let ext = attempt == 1 ? base : "\(base)-\(attempt)"
+            let aside = url.appendingPathExtension(ext)
+            guard !fm.fileExists(atPath: aside.path) else { continue }
+            if (try? fm.moveItem(at: url, to: aside)) != nil { return }
+        }
     }
 }
 

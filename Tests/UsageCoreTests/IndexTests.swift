@@ -245,10 +245,11 @@ struct IndexTests {
 
     @Test func anotherBuildsIndexIsLeftAlone() async throws {
         let projects = try TempProjects()
-        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        let folder = projects.root.deletingLastPathComponent().appendingPathComponent("cache")
+        let cache = folder.appendingPathComponent("index.json")
         try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
-        let newer = #"{"version":\#(ClaudeTranscripts.cacheVersion + 1),"root":"\#(projects.root.path)","records":{}}"#
-        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let newer = #"{"version":\#(ClaudeTranscripts.cacheVersion + 1),"root":"\#(projects.root.path)","records":{"s.jsonl":{"future":true}}}"#
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try Data(newer.utf8).write(to: cache)
 
         let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
@@ -256,12 +257,53 @@ struct IndexTests {
         await index.save()
         #expect(try String(contentsOf: cache, encoding: .utf8) == newer)
 
-        // An index that doesn't decode is set aside, not overwritten.
-        try Data("{not json".utf8).write(to: cache)
-        let fresh = UsageIndex(projectsURL: projects.root, cacheURL: cache)
-        _ = await fresh.refresh()
-        await fresh.save()
-        #expect(try String(contentsOf: cache.appendingPathExtension("unreadable"), encoding: .utf8) == "{not json")
+        // Two unreadable indexes in a row are both set aside under timestamped names, never overwriting the earlier one.
+        for bad in ["{not json", "{broken second"] {
+            try Data(bad.utf8).write(to: cache)
+            let fresh = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+            _ = await fresh.refresh()
+            await fresh.save()
+        }
+        let entries = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("index.json.unreadable-") }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        #expect(entries.count == 2)
+        #expect(entries.allSatisfy {
+            $0.lastPathComponent.range(of: #"^index\.json\.unreadable-\d{8}-\d{6}(-\d+)?$"#, options: .regularExpression) != nil
+        })
+        let saved = try Set(entries.map { try String(contentsOf: $0, encoding: .utf8) })
+        #expect(saved == ["{not json", "{broken second"])
+    }
+
+    @Test func readOnlyCorruptRecoveryDeletesItsPreviousBackup() async throws {
+        let projects = try TempProjects()
+        let folder = projects.root.deletingLastPathComponent()
+        let cache = folder.appendingPathComponent("cache.json")
+        let backup = cache.appendingPathExtension("unreadable")
+        let transcript = try projects.write("-fixture/session.jsonl", [
+            Lines.user("2026-01-01T10:00:00Z"),
+            Lines.assistant("2026-01-01T10:00:01Z", id: "archived"),
+        ])
+        let writer = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await writer.refresh()
+        try FileManager.default.removeItem(at: transcript)
+        let archived = await writer.refresh()
+        await writer.save()
+        #expect(archived.usage.count == 1 && archived.transcriptCount == 0)
+
+        let recovery = try Data(contentsOf: cache)
+        try recovery.write(to: backup)
+        let positive = await UsageIndex(projectsURL: projects.root, cacheURL: backup, readOnly: true).refresh()
+        #expect(positive.usage.count == 1)
+
+        try Data("{broken".utf8).write(to: cache)
+        let data = await UsageIndex(projectsURL: projects.root, cacheURL: cache, readOnly: true).refresh()
+        #expect(data.isEmpty)
+        #expect(try Data(contentsOf: cache) == Data("{broken".utf8))
+        #expect(try Data(contentsOf: backup) == recovery)
+        let extraBackups = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("cache.json.unreadable-") }
+        #expect(extraBackups.isEmpty)
     }
 
     @Test func readOnlyIndexLeavesNoCacheFile() async throws {
