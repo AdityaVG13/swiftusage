@@ -82,6 +82,9 @@ struct TokenChartData {
     let bucketDays: Int
     let series: [String]
     let seriesColors: [Color]
+    /// Each model in the list by name, and the color its bars have. Models past the first four are in
+    /// the gray "Other" series instead, which a model of that name doesn't share.
+    let colors: [String: Color]
     let buckets: [Bucket]
     let ticks: [Int64]
 
@@ -89,10 +92,12 @@ struct TokenChartData {
         firstDay = stats.firstDay
         bucketDays = stats.today - stats.firstDay + 1 > 62 ? 7 : 1
         lastBucket = stats.firstDay + (stats.today - stats.firstDay) / bucketDays * bucketDays
-        var names = stats.models.prefix(Self.maxSeries).map(\.name)
+        let top = stats.models.prefix(Self.maxSeries).map(\.name)
+        var names = top
         if stats.models.count > Self.maxSeries { names.append(Self.otherName) }
         series = names
-        seriesColors = names.indices.map { names[$0] == Self.otherName ? Self.otherColor : Theme.modelColor(rank: $0) }
+        seriesColors = names.indices.map { $0 < top.count ? Theme.modelColor(rank: $0) : Self.otherColor }
+        colors = Dictionary(zip(top, seriesColors), uniquingKeysWith: { first, _ in first })
 
         let index = Dictionary(uniqueKeysWithValues: stats.models.prefix(Self.maxSeries).enumerated().map { ($1.id, $0) })
         let other = names.count - 1
@@ -109,8 +114,6 @@ struct TokenChartData {
         }.sorted { $0.day < $1.day }
         ticks = Self.ticks(max: buckets.map(\.total).max() ?? 0)
     }
-
-    var colors: [String: Color] { Dictionary(uniqueKeysWithValues: zip(series, seriesColors)) }
 
     /// Days the x axis spans, with half a bar of room at each end.
     var domain: ClosedRange<Double> {
