@@ -34,11 +34,15 @@ if $notarize && ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/n
     echo "Set NOTARY_PROFILE to use others, or pass --skip-notarization." >&2
     exit 1
 fi
-if ! grep -q "^## $VERSION" CHANGELOG.md; then
+if ! grep -qxF "## $VERSION" CHANGELOG.md; then
     echo "CHANGELOG.md has no section for $VERSION." >&2
     exit 1
 fi
 if [[ -n $(git status --porcelain) ]]; then
+    if $notarize; then
+        echo "The working tree has uncommitted changes. Commit them first, so the release matches its commit." >&2
+        exit 1
+    fi
     echo "Warning: the working tree has uncommitted changes, and the release includes them." >&2
 fi
 
@@ -69,8 +73,7 @@ codesign --verify --strict --deep "$APP"
 for arch in arm64 x86_64; do lipo "$APP/Contents/MacOS/swiftusage" -verify_arch $arch; done
 IDENTITY=$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=\(Developer ID Application: .*\)$/\1/p')
 
-rm -rf "$DIST"
-mkdir -p "$DIST"
+mkdir -p "$WORK/dist"
 
 if $notarize; then
     ditto -c -k --keepParent "$APP" "$WORK/SwiftUsage.zip"
@@ -79,23 +82,27 @@ if $notarize; then
     xcrun stapler staple -q "$APP"
 fi
 
-ditto -c -k --sequesterRsrc --keepParent "$APP" "$DIST/$NAME.zip"
+ditto -c -k --sequesterRsrc --keepParent "$APP" "$WORK/dist/$NAME.zip"
 
 # The app beside a link to Applications, to drag it to.
-uvx --quiet --from dmgbuild==1.6.7 dmgbuild -s scripts/dmg-settings.py -D app="$APP" SwiftUsage "$DIST/$NAME.dmg"
-codesign --force --timestamp --sign "$IDENTITY" "$DIST/$NAME.dmg"
+uvx --quiet --from dmgbuild==1.6.7 dmgbuild -s scripts/dmg-settings.py -D app="$APP" SwiftUsage "$WORK/dist/$NAME.dmg"
+codesign --force --timestamp --sign "$IDENTITY" "$WORK/dist/$NAME.dmg"
 if $notarize; then
-    submit "$DIST/$NAME.dmg"
-    xcrun stapler staple -q "$DIST/$NAME.dmg"
+    submit "$WORK/dist/$NAME.dmg"
+    xcrun stapler staple -q "$WORK/dist/$NAME.dmg"
     # What Gatekeeper decides for someone who downloads them.
     spctl --assess --type execute "$APP"
-    spctl --assess --type open --context context:primary-signature "$DIST/$NAME.dmg"
+    spctl --assess --type open --context context:primary-signature "$WORK/dist/$NAME.dmg"
 fi
 
-ditto -c -k --keepParent "$APP.dSYM" "$DIST/$NAME-dSYM.zip"
-awk -v heading="## $VERSION" '$0 ~ "^" heading { found = 1; next } found && /^## / { exit } found' CHANGELOG.md \
-    | sed '/./,$!d' > "$DIST/$NAME-notes.md"
-(cd "$DIST" && shasum -a 256 "$NAME.dmg" "$NAME.zip" > SHA256SUMS)
+ditto -c -k --keepParent "$APP.dSYM" "$WORK/dist/$NAME-dSYM.zip"
+awk -v heading="## $VERSION" '$0 == heading { found = 1; next } found && /^## / { exit } found' CHANGELOG.md \
+    | sed '/./,$!d' > "$WORK/dist/$NAME-notes.md"
+git rev-parse HEAD > "$WORK/dist/COMMIT"
+(cd "$WORK/dist" && shasum -a 256 "$NAME.dmg" "$NAME.zip" > SHA256SUMS)
+
+rm -rf "$DIST"
+mv "$WORK/dist" "$DIST"
 
 echo "\nSwiftUsage $VERSION, signed by $IDENTITY$($notarize && echo ', notarized and stapled' || echo ', NOT notarized'):"
 ls -lh "$DIST" | sed 1d
