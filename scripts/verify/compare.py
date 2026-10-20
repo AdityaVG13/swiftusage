@@ -22,3 +22,4 @@ for day, s in a.get('statsDays', {}).items():
     tok = sum(sum(v) for v in raw.get('tokens', {}).values())
     if (s['sessions'], s['messages'], s['tokens']) != (raw.get('sessions', 0), raw.get('messages', 0), tok): bad += 1; print('panel/raw mismatch', day, s, raw)
 print('panel per-day totals vs raw data:', 'CONSISTENT' if bad == 0 else f'{bad} mismatches')
+sys.exit(1 if problems or bad else 0)
