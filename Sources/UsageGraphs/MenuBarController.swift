@@ -248,14 +248,16 @@ private struct PanelRoot: View {
     var body: some View {
         let customizing = state.customizing != nil
         let inset = state.screenshotMode ? Theme.Layout.margin : 0
+        let zoom: AnyTransition = Theme.Motion.reduced ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .top))
+        let still = presentation.isPresented || Theme.Motion.reduced
         ShownLayout(shown: customizing ? 1 : 0) {
             PanelView()
                 .tabVisible(!customizing)
             if customizing {
                 CustomizeView()
                     .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(Theme.Motion.select.delay(0.05)),
-                        removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .top)).animation(Theme.Motion.leave)))
+                        insertion: zoom.animation(Theme.Motion.select.delay(0.05)),
+                        removal: zoom.animation(Theme.Motion.leave)))
             }
         }
         .background {
@@ -281,8 +283,8 @@ private struct PanelRoot: View {
         .padding(.horizontal, Theme.Layout.margin - inset)
         .padding(.top, Theme.Layout.topGap)
         .padding(.bottom, Theme.Layout.margin)
-        .scaleEffect(presentation.isPresented ? 1 : 0.9, anchor: .top)
-        .offset(y: presentation.isPresented ? 0 : -18)
+        .scaleEffect(still ? 1 : 0.9, anchor: .top)
+        .offset(y: still ? 0 : -18)
         // Exactly the window's height, so modules taller than it run off the bottom rather than being
         // centered.
         .frame(maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)

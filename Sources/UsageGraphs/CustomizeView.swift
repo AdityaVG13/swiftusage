@@ -211,7 +211,7 @@ private struct MenuBarPage: View {
                 } glyph: {
                     Image(systemName: "dollarsign").font(.system(size: 15, weight: .semibold))
                         // Flips like a tossed coin.
-                        .rotation3DEffect(.degrees(showCost ? 360 : 0), axis: (x: 0, y: 1, z: 0))
+                        .rotation3DEffect(.degrees(showCost && !Theme.Motion.reduced ? 360 : 0), axis: (x: 0, y: 1, z: 0))
                 }
                 ToggleTile(title: "Remaining", detail: remaining(content), isOn: showsLeft,
                            help: "Show what's left of each limit instead of what's used") {
@@ -589,7 +589,7 @@ private struct LitCircle<Glyph: View>: View {
         ZStack {
             Circle().fill(.white.opacity(0.12))
             Circle().fill(.white)
-                .scaleEffect(isOn ? 1 : 0.25)
+                .scaleEffect(isOn || Theme.Motion.reduced ? 1 : 0.25)
                 .opacity(isOn ? 1 : 0)
             glyph()
                 .foregroundStyle(isOn ? Color.black.opacity(0.85) : Color.white.opacity(0.8))
@@ -650,15 +650,20 @@ private struct BareButton: ButtonStyle {
 private struct Shake: ViewModifier {
     let trigger: Int
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, x in
-            view.offset(x: x)
-        } keyframes: { _ in
-            LinearKeyframe(-7, duration: 0.06)
-            LinearKeyframe(6, duration: 0.08)
-            LinearKeyframe(-4, duration: 0.07)
-            LinearKeyframe(2, duration: 0.06)
-            SpringKeyframe(0, duration: 0.2)
+        if Theme.Motion.reduced {
+            content
+        } else {
+            content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, x in
+                view.offset(x: x)
+            } keyframes: { _ in
+                LinearKeyframe(-7, duration: 0.06)
+                LinearKeyframe(6, duration: 0.08)
+                LinearKeyframe(-4, duration: 0.07)
+                LinearKeyframe(2, duration: 0.06)
+                SpringKeyframe(0, duration: 0.2)
+            }
         }
     }
 }

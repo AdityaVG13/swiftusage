@@ -152,7 +152,7 @@ private struct Morph: ViewModifier, Animatable {
         let faded = min(max(progress, 0), 1)
         content
             .blur(radius: 4 * faded)
-            .scaleEffect(1 - 0.15 * progress)
+            .scaleEffect(Theme.Motion.reduced ? 1 : 1 - 0.15 * progress)
             .opacity(1 - faded * faded)
     }
 }
@@ -274,12 +274,17 @@ struct PressScale: ButtonStyle {
 struct Pop<Trigger: Equatable & Sendable>: ViewModifier {
     let trigger: Trigger
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, scale in
-            view.scaleEffect(scale)
-        } keyframes: { _ in
-            CubicKeyframe(0.84, duration: 0.09)
-            SpringKeyframe(1, duration: 0.5, spring: Spring(duration: 0.5, bounce: 0.55))
+        if Theme.Motion.reduced {
+            content
+        } else {
+            content.keyframeAnimator(initialValue: 1.0, trigger: trigger) { view, scale in
+                view.scaleEffect(scale)
+            } keyframes: { _ in
+                CubicKeyframe(0.84, duration: 0.09)
+                SpringKeyframe(1, duration: 0.5, spring: Spring(duration: 0.5, bounce: 0.55))
+            }
         }
     }
 }
@@ -329,7 +334,7 @@ struct ProviderPicker: View {
                         .font(.system(size: 12.5, weight: .semibold))
                         .lineLimit(1)
                         .fixedSize()
-                        .transition(.asymmetric(insertion: .opacity.combined(with: .offset(x: -4)), removal: .identity))
+                        .transition(.asymmetric(insertion: Theme.Motion.reduced ? .opacity : .opacity.combined(with: .offset(x: -4)), removal: .identity))
                 }
             }
             .padding(.horizontal, selected ? 12 : 0)

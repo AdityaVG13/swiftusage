@@ -39,41 +39,49 @@ enum Theme {
     /// for anything that arrives, moves or changes, and quick eases only for what's leaving, which a
     /// spring would bounce back into view.
     enum Motion {
+        /// Reduce Motion in Accessibility settings: the springs become short eases, and what would scale,
+        /// slide, shake or spin fades or stays put instead.
+        static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
         /// Opening: the modules drop down into place and bounce as they land.
-        static let open = Animation.spring(duration: 0.5, bounce: 0.38)
+        static var open: Animation { spring(duration: 0.5, bounce: 0.38) }
         static let close = Animation.smooth(duration: 0.2)
         /// Window fades, which Core Animation runs alongside the springs.
         static let fadeIn: TimeInterval = 0.2
         static let fadeOut: TimeInterval = 0.17
         /// Switching tab, provider or range: the selection pill overshoots and springs back.
-        static let select = Animation.spring(duration: 0.4, bounce: 0.3)
+        static var select: Animation { spring(duration: 0.4, bounce: 0.3) }
         /// Whatever is being replaced, so old and new barely overlap.
         static let leave = Animation.easeIn(duration: 0.14)
         /// Text being replaced in place. It fades fastest at the start, so it's mostly gone before the
         /// new text shows; an ease-in would keep it near full strength over the new text.
         static let textOut = Animation.easeOut(duration: 0.09)
         /// A value's characters rolling into place: quick, settling with a bounce like a reel.
-        static let roll = Animation.spring(duration: 0.5, bounce: 0.32)
+        static var roll: Animation { spring(duration: 0.5, bounce: 0.32) }
         /// A value's characters morphing into new ones in place, the new ones popping a little past full
         /// size before they settle.
-        static let morph = Animation.spring(duration: 0.45, bounce: 0.32)
+        static var morph: Animation { spring(duration: 0.45, bounce: 0.32) }
         /// New numbers arriving while the panel is open.
-        static let data = Animation.spring(duration: 0.55, bounce: 0.28)
+        static var data: Animation { spring(duration: 0.55, bounce: 0.28) }
         /// Pointer feedback: quick, with a little spring where something moves, like the heatmap's ring
         /// overshooting into the next day.
-        static let hover = Animation.spring(duration: 0.24, bounce: 0.3)
+        static var hover: Animation { spring(duration: 0.24, bounce: 0.3) }
         /// Turning something on or off in Customize: lively, with a clear overshoot.
-        static let toggle = Animation.spring(duration: 0.42, bounce: 0.38)
+        static var toggle: Animation { spring(duration: 0.42, bounce: 0.38) }
         /// An account in the menu bar preview lifting as it's dragged, the others stepping aside for it,
         /// and settling where it's dropped.
-        static let reorder = Animation.spring(duration: 0.34, bounce: 0.3)
+        static var reorder: Animation { spring(duration: 0.34, bounce: 0.3) }
         /// A button sinking as it's pressed and springing back past its size.
-        static let press = Animation.spring(duration: 0.3, bounce: 0.5)
+        static var press: Animation { spring(duration: 0.3, bounce: 0.5) }
         /// The caption under the pointer: quick, so it keeps up with the pointer.
         static let caption = Animation.easeOut(duration: 0.12)
         /// The refresh arrow following each step of its turn. A spring keeps its speed from step to
         /// step, so it gathers speed, turns evenly, and wobbles past upright when the steps stop.
-        static let spin = Animation.spring(duration: 0.6, bounce: 0.32)
+        static var spin: Animation { spring(duration: 0.6, bounce: 0.32) }
+
+        private static func spring(duration: Double, bounce: Double) -> Animation {
+            reduced ? .easeInOut(duration: 0.15) : .spring(duration: duration, bounce: bounce)
+        }
     }
 
     enum Layout {
@@ -127,7 +135,7 @@ extension View {
     /// overlaps rather than showing both layouts at half strength.
     func tabVisible(_ visible: Bool) -> some View {
         opacity(visible ? 1 : 0)
-            .scaleEffect(visible ? 1 : 0.96, anchor: .top)
+            .scaleEffect(visible || Theme.Motion.reduced ? 1 : 0.96, anchor: .top)
             .animation(visible ? Theme.Motion.select.delay(0.05) : Theme.Motion.leave, value: visible)
             .allowsHitTesting(visible)
             .accessibilityHidden(!visible)

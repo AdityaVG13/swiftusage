@@ -308,6 +308,8 @@ private struct Footer: View {
                 CircleIcon(systemImage: "arrow.clockwise")
                     // The circle behind it is round, so only the arrow is seen to turn.
                     .rotationEffect(.degrees(arrowAngle))
+                    // With Reduce Motion it dims instead.
+                    .opacity(Theme.Motion.reduced && reloading > 0 ? 0.45 : 1)
             }
             .buttonStyle(PressScale(scale: 0.88))
             .help("Refresh")
@@ -410,7 +412,7 @@ private struct Footer: View {
     /// Turns the refresh arrow while the panel is open. Closing the panel stops it, and opening it again
     /// before the reloads are done starts it again.
     private func spin() {
-        guard !spinning, presentation.isPresented else { return }
+        guard !spinning, presentation.isPresented, !Theme.Motion.reduced else { return }
         spinning = true
         Task {
             // The arrow's spring chases a target stepped a little further round every tenth of a second,
