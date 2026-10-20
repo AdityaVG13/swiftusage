@@ -200,7 +200,7 @@ struct ResetTests {
         #expect(freshAnthropic.sent.first?.body?["grant_id"] == "g3")
     }
 
-    @Test func unwritableResetJournalStillSendsAndSpendsAgainAfterRestart() async throws {
+    @Test func aResetThatCantBeSavedIsNotSent() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-resets-unwritable-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer {

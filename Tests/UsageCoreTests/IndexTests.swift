@@ -275,7 +275,7 @@ struct IndexTests {
         #expect(saved == ["{not json", "{broken second"])
     }
 
-    @Test func readOnlyCorruptRecoveryDeletesItsPreviousBackup() async throws {
+    @Test func aReadOnlyIndexLeavesABrokenCacheAndItsBackupsAlone() async throws {
         let projects = try TempProjects()
         let folder = projects.root.deletingLastPathComponent()
         let cache = folder.appendingPathComponent("cache.json")
