@@ -283,7 +283,7 @@ enum Limits {
                         let used = switch meter.unit {
                         case .percent: String(format: "%.0f%%", meter.used)
                         case .dollars: "\(Format.dollars(meter.used)) of \(Format.dollars(meter.limit))"
-                        case .count: "\(Format.grouped(Int(meter.used))) of \(Format.grouped(Int(meter.limit)))"
+                        case .count: "\(Format.grouped(Int(saturating: meter.used))) of \(Format.grouped(Int(saturating: meter.limit)))"
                         }
                         let reset = meter.resetsAt.map { "resets " + $0.formatted(date: .abbreviated, time: .shortened) } ?? "not started"
                         let projection = pace.atReset.map { String(format: "  ~%.0f%% at reset", $0 * 100) } ?? ""

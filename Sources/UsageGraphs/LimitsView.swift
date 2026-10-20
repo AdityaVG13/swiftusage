@@ -352,7 +352,7 @@ enum LimitText {
         case .percent: String(format: "%.0f%%", meter.used.rounded(.down))
         case .dollars: compactDollars(meter.used) + "/" + compactDollars(meter.limit)
         case .count where meter.limit >= 10_000: compactCount(meter.used) + "/" + compactCount(meter.limit)
-        case .count: Format.grouped(Int(meter.used)) + "/" + Format.grouped(Int(meter.limit))
+        case .count: Format.grouped(Int(saturating: meter.used)) + "/" + Format.grouped(Int(saturating: meter.limit))
         }
     }
 
@@ -374,7 +374,7 @@ enum LimitText {
         // Rounded down, as in the row beside it.
         case .percent: parts.append(String(format: "%.0f%% used", meter.used.rounded(.down)))
         case .dollars: parts.append("\(compactDollars(meter.used)) of \(compactDollars(meter.limit)) used")
-        case .count: parts.append("\(Format.grouped(Int(meter.used))) of \(Format.grouped(Int(meter.limit))) used")
+        case .count: parts.append("\(Format.grouped(Int(saturating: meter.used))) of \(Format.grouped(Int(saturating: meter.limit))) used")
         }
         if let reset = meter.resetsAt {
             parts.append("resets " + reset.formatted(Calendar.current.isDate(reset, inSameDayAs: now) ? .dateTime.hour().minute() : .dateTime.weekday(.abbreviated).hour().minute()))
@@ -395,7 +395,7 @@ enum LimitText {
     }
 
     static func countdown(_ interval: TimeInterval) -> String {
-        let minutes = max(Int(interval / 60), 0)
+        let minutes = max(Int(saturating: interval / 60), 0)
         if minutes < 1 { return "under a minute" }
         if minutes < 60 { return "\(minutes)m" }
         let hours = minutes / 60
@@ -405,7 +405,7 @@ enum LimitText {
 
     /// `12.3K`, and `100K` rather than `100.0K`.
     private static func compactCount(_ value: Double) -> String {
-        let label = Format.compact(Int64(value))
+        let label = Format.compact(Int64(Int(saturating: value)))
         guard let unit = label.last, unit.isLetter, label.dropLast().hasSuffix(".0") else { return label }
         return label.dropLast(3) + String(unit)
     }

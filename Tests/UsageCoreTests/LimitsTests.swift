@@ -128,6 +128,19 @@ struct LimitsTests {
         #expect(CodexLimits.plan("team_plus") == "Team Plus")
     }
 
+    @Test func outOfRangeNumericResetDatesAreIgnored() {
+        #expect(JSONValue.date(1_792_440_000) == Date(timeIntervalSince1970: 1_792_440_000))
+        #expect(JSONValue.date(1_792_440_000_000) == Date(timeIntervalSince1970: 1_792_440_000))
+        #expect(JSONValue.date(1e24) == nil)
+        let codex = CodexLimits.limits([
+            "rate_limit": [
+                "primary_window": ["used_percent": 25, "reset_at": 1e24],
+                "secondary_window": ["used_percent": 50, "reset_after_seconds": 1e24],
+            ],
+        ], id: "codex:x", account: nil)
+        #expect(codex.meters.map(\.resetsAt) == [nil, nil])
+    }
+
     @Test func fractionalCodexCreditsAreNotTruncated() {
         let result = CodexLimits.limits(["credits": ["has_credits": true, "balance": "0.75"]], id: "codex:fixture", account: nil)
         #expect(result.notes.first?.value == "0.75")

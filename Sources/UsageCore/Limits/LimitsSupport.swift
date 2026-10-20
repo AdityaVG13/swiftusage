@@ -107,7 +107,7 @@ enum EnvironmentFolders {
 extension Int {
     /// A server's number as a whole count, rounded toward zero; one past `Int`'s range saturates rather
     /// than trapping.
-    init(saturating value: Double) {
+    public init(saturating value: Double) {
         self = value.isNaN ? 0 : value >= 0x1p63 ? .max : value <= -0x1p63 ? .min : Int(value)
     }
 }
@@ -131,8 +131,9 @@ enum JSONValue {
         if let string = value as? String, let seconds = Timestamp.parse(string) {
             return Date(timeIntervalSince1970: seconds)
         }
-        guard let number = number(value), number > 0 else { return nil }
-        return Date(timeIntervalSince1970: number < 1e11 ? number : number / 1000)
+        guard let number = number(value), number > 0,
+              let seconds = Timestamp.seconds(number < 1e11 ? number : number / 1000) else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     static func object(_ data: Data?) -> [String: Any]? {

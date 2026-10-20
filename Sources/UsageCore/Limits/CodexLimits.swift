@@ -111,7 +111,7 @@ public struct CodexLimits: LimitsSource {
             guard let window = limit[slot] as? [String: Any], let used = JSONValue.number(window["used_percent"]) else { continue }
             let seconds = JSONValue.number(window["limit_window_seconds"])
             let reset = JSONValue.date(window["reset_at"])
-                ?? JSONValue.number(window["reset_after_seconds"]).map { Date().addingTimeInterval($0) }
+                ?? JSONValue.number(window["reset_after_seconds"]).flatMap(Timestamp.seconds).map { Date().addingTimeInterval($0) }
             let name: String = switch seconds {
             case 18_000?: "Session"
             case 604_800?: "Weekly"
