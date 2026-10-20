@@ -11,6 +11,7 @@ import Foundation
 public actor CursorSource: UsageSource {
     public nonisolated let provider = Provider.cursor
     public nonisolated let chatsURL: URL
+    public nonisolated let acpSessionsURL: URL
     public nonisolated let ideStateURL: URL
     private var chats: [String: Chat] = [:]
     private var ide = Chat(id: "ide")
@@ -19,25 +20,29 @@ public actor CursorSource: UsageSource {
     private var ideReadAt: Date?
 
     public init(chatsURL: URL = URL.home.appendingPathComponent(".cursor/chats"),
+                acpSessionsURL: URL? = nil,
                 ideStateURL: URL = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")) {
         self.chatsURL = chatsURL
+        self.acpSessionsURL = acpSessionsURL ?? chatsURL.deletingLastPathComponent().appendingPathComponent("acp-sessions")
         self.ideStateURL = ideStateURL
     }
 
-    public nonisolated var watchedPaths: [String] { [chatsURL.path, ideStateURL.deletingLastPathComponent().path] }
+    public nonisolated var watchedPaths: [String] { [chatsURL.path, acpSessionsURL.path, ideStateURL.deletingLastPathComponent().path] }
 
     public func refresh(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
         var seen: Set<String> = []
-        for relative in TranscriptFolders.files(in: chatsURL, depth: 2, include: { $0 == "store.db" }).keys.sorted() {
-            let path = chatsURL.path + "/" + relative
-            guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else { continue }
-            guard let stamp = DatabaseStamp(path: path) else { continue }
-            if chats[path]?.stamp == stamp { continue }
-            guard let reader = SQLiteReader(path: path),
-                  var chat = Chat.readCLI(reader, id: (relative as NSString).deletingLastPathComponent)
-            else { continue }
-            chat.stamp = stamp
-            chats[path] = chat
+        for root in [chatsURL, acpSessionsURL] {
+            for relative in TranscriptFolders.files(in: root, depth: 2, include: { $0 == "store.db" }).keys.sorted() {
+                let path = root.path + "/" + relative
+                guard seen.insert(URL(fileURLWithPath: path).resolvingSymlinksInPath().path).inserted else { continue }
+                guard let stamp = DatabaseStamp(path: path) else { continue }
+                if chats[path]?.stamp == stamp { continue }
+                guard let reader = SQLiteReader(path: path),
+                      var chat = Chat.readCLI(reader, id: (relative as NSString).deletingLastPathComponent)
+                else { continue }
+                chat.stamp = stamp
+                chats[path] = chat
+            }
         }
         if let stamp = DatabaseStamp(path: ideStateURL.path), ide.stamp != stamp,
            ideReadAt.map({ Date().timeIntervalSince($0) >= 60 }) ?? true,

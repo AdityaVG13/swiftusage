@@ -470,6 +470,30 @@ struct ProviderTests {
         #expect(data.sessionStarts.count == 1)
         #expect(data.messageBuckets.values.reduce(0, +) == 1)
     }
+
+    @Test func cursorReadsACPSessions() async throws {
+        let home = try TempProjects()
+        let acp = home.root.appendingPathComponent("acp-sessions")
+        let folder = acp.appendingPathComponent("hash/agent")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(folder.appendingPathComponent("store.db").path, &db) == SQLITE_OK)
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        run("CREATE TABLE meta (key TEXT, value TEXT)")
+        run("CREATE TABLE blobs (id TEXT, data BLOB)")
+        let meta = json(["createdAt": 1792317600000, "latestRootBlobId": "root"])
+        run("INSERT INTO meta VALUES ('0', '\(Data(meta.utf8).hexString)')")
+        run("INSERT INTO blobs VALUES ('root', X'0a01aa')")
+        run(#"INSERT INTO blobs VALUES ('aa', X'\#(Data(#"{"role":"user","content":"hi"}"#.utf8).hexString)')"#)
+        sqlite3_close(db)
+
+        try FileManager.default.createSymbolicLink(at: acp.appendingPathComponent("alias"), withDestinationURL: acp.appendingPathComponent("hash"))
+        let source = CursorSource(chatsURL: home.root.appendingPathComponent("chats"), ideStateURL: home.root.appendingPathComponent("missing.vscdb"))
+        #expect(source.watchedPaths.contains(acp.path))
+        let data = await source.refresh()
+        #expect(data.sessionStarts.count == 1)
+        #expect(data.messageBuckets.values.reduce(0, +) == 1)
+    }
 }
 
 extension ProviderTests {
