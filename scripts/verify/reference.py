@@ -12,7 +12,9 @@ for proj in os.listdir(root):
         if os.path.isdir(sd): subs += [f'{proj}/{e}/subagents/{a}' for a in os.listdir(sd) if a.startswith('agent-') and a.endswith('.jsonl')]
 order = sorted(mains + subs)
 def ts(s):
-    try: return datetime.datetime.fromisoformat(s.replace('Z', '+00:00')).timestamp()
+    try:
+        dt = datetime.datetime.fromisoformat(s.replace('Z', '+00:00'))
+        return (dt if dt.tzinfo else dt.replace(tzinfo=datetime.timezone.utc)).timestamp()
     except Exception: return None
 files = {}
 for rel in order:
