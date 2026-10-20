@@ -13,7 +13,7 @@ swift build -c release --product swiftusage >/dev/null
 BIN="$(swift build -c release --show-bin-path)/swiftusage"
 
 mkdir -p "$WORK/snapshot"
-cp -cR "$SOURCE" "$WORK/snapshot/projects"
+cp -cRH "$SOURCE" "$WORK/snapshot/projects"
 echo "Snapshot: $(find "$WORK/snapshot/projects" -name '*.jsonl' | wc -l | tr -d ' ') transcripts"
 
 CLAUDE_CONFIG_DIR="$WORK/snapshot" "$BIN" --dump --provider claude --cold --json > "$WORK/app.json"
