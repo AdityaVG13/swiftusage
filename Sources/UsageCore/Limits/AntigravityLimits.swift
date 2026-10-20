@@ -94,20 +94,21 @@ public actor AntigravityLimits: LimitsSource {
     }
 
     /// A renewed token when the login can renew, kept until it nears expiry; else the login's own while it lasts.
-    private func session(for login: Login) async -> Session {
+    func session(for login: Login, renew: (@Sendable (String) async -> Renewal)? = nil) async -> Session {
         let soon = Date().addingTimeInterval(60)
         let own = login.access.flatMap { (login.expires ?? .distantFuture) > soon ? $0 : nil }
         guard let refresh = login.refresh else {
             return own.map { Session(token: $0) } ?? Session(problem: "Login expired. \(Self.renew)")
         }
         if let cached = renewed[refresh], cached.expires > soon { return Session(token: cached.token, email: cached.email) }
-        switch await renewToken(refresh) {
+        let outcome: Renewal = if let renew { await renew(refresh) } else { await renewToken(refresh) }
+        switch outcome {
         case .renewed(let token, let expires, let email):
             let email = email ?? renewed[refresh]?.email
             renewed[refresh] = (token, expires, email)
             return Session(token: token, email: email)
         case .rejected:
-            return Session(problem: "Login expired. \(Self.renew)")
+            return Session(email: renewed[refresh]?.email, problem: "Login expired. \(Self.renew)")
         case .unavailable:
             return own.map { Session(token: $0, email: renewed[refresh]?.email) } ?? Session(email: renewed[refresh]?.email, problem: "Couldn't reach Google.")
         }
@@ -186,7 +187,7 @@ public actor AntigravityLimits: LimitsSource {
         return plan
     }
 
-    private enum Renewal {
+    enum Renewal {
         case renewed(String, Date, String?)
         case rejected
         case unavailable

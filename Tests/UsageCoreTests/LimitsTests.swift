@@ -339,6 +339,15 @@ struct LimitsTests {
         #expect(freshSession.first?.period == 18_000)
     }
 
+    @Test func rejectedAntigravityRenewalKeepsCachedEmail() async {
+        let source = AntigravityLimits()
+        let login = AntigravityLimits.Login(refresh: "1//fixture")
+        _ = await source.session(for: login) { _ in .renewed("tok", .distantPast, "user@example.com") }
+        let rejected = await source.session(for: login) { _ in .rejected }
+        #expect(rejected.email == "user@example.com")
+        #expect(rejected.problem == "Login expired. Open Antigravity or run `agy` to sign in again.")
+    }
+
     @Test func piReadsItsSubscriptionLogins() {
         let auth = object("""
             {"anthropic":{"type":"oauth","access":"sk-ant-oat","refresh":"r","expires":1792500000000},
