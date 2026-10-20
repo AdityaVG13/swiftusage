@@ -288,8 +288,11 @@ private struct TokenChartDescriptor: AXChartDescriptorRepresentable {
             (weekly ? "Week of " : "") + DayClock().date(of: day).formatted(.dateTime.month(.abbreviated).day())
         }
         let x = AXCategoricalDataAxisDescriptor(title: weekly ? "Week" : "Day", categoryOrder: data.buckets.map { label($0.day) })
+        // The descriptor also describes the bars' mean, which is NaN when there are none.
         let y = AXNumericDataAxisDescriptor(title: "Tokens", range: 0...Double(max(data.ticks.last ?? 1, 1)),
-                                            gridlinePositions: data.ticks.map(Double.init)) { Format.compact(Int64($0)) + " tokens" }
+                                            gridlinePositions: data.ticks.map(Double.init)) { value in
+            Int64(exactly: value.rounded(.towardZero)).map { Format.compact($0) + " tokens" } ?? ""
+        }
         let series = data.series.indices.map { index in
             AXDataSeriesDescriptor(name: index < data.colors.count ? data.series[index] : "Other models", isContinuous: false,
                                    dataPoints: data.buckets.map { bucket in

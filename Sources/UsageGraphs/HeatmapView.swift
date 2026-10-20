@@ -142,7 +142,10 @@ private struct HeatmapChart: AXChartDescriptorRepresentable {
     func makeChartDescriptor() -> AXChartDescriptor {
         let most = Double(days.map(\.messages).max() ?? 0)
         let x = AXCategoricalDataAxisDescriptor(title: "Day", categoryOrder: days.map(\.date))
-        let y = AXNumericDataAxisDescriptor(title: "Messages", range: 0...max(most, 1), gridlinePositions: []) { "\(Int($0)) messages" }
+        // The descriptor also describes the days' mean, which is NaN when there are none.
+        let y = AXNumericDataAxisDescriptor(title: "Messages", range: 0...max(most, 1), gridlinePositions: []) { value in
+            Int(exactly: value.rounded(.towardZero)).map { "\($0) messages" } ?? ""
+        }
         let series = AXDataSeriesDescriptor(name: "Messages", isContinuous: false,
                                             dataPoints: days.map { AXDataPoint(x: $0.date, y: Double($0.messages)) })
         return AXChartDescriptor(title: "Activity", summary: nil, xAxis: x, yAxis: y, additionalAxes: [], series: [series])
