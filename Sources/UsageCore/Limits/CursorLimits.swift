@@ -9,7 +9,11 @@ public struct CursorLimits: LimitsSource {
     public init() {}
 
     public func fetch() async -> [AccountLimits] {
-        let state = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+        await fetch(home: .home)
+    }
+
+    func fetch(home: URL = .home) async -> [AccountLimits] {
+        let state = home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
         guard let reader = SQLiteReader(path: state.path) else { return [] }
         var values: [String: String] = [:]
         reader.rows("SELECT key, value FROM ItemTable WHERE key IN ('cursorAuth/accessToken', 'cursorAuth/cachedEmail', 'cursorAuth/stripeMembershipType')") { row in
@@ -36,7 +40,7 @@ public struct CursorLimits: LimitsSource {
         }
         guard let usage = usageResponse.json else { return [.failed(id, provider, account: email, plan: plan, "Cursor's usage API sent something unexpected.")] }
         var result = Self.limits(usage, planInfo: planInfo, id: id, account: email, plan: plan)
-        if !result.hasValues {
+        if !result.meters.contains(where: { $0.id == "total" || $0.id == "auto" }) {
             // Team and enterprise plans report through the dashboard's own endpoints instead.
             let user = (JWT.claims(token)?["sub"] as? String).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
             let cookie = ["Cookie": "WorkosCursorSessionToken=\(user)%3A%3A\(token)", "Accept": "application/json"]
@@ -44,8 +48,14 @@ public struct CursorLimits: LimitsSource {
             let requests = await HTTP.get("https://cursor.com/api/usage?user=" + (user.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? user), headers: cookie)
             let dashboard = Self.dashboard(summary: await summary?.json, requests: requests?.json)
             if dashboard.hasValues {
-                result.meters = dashboard.meters
-                result.notes = dashboard.notes
+                let overage = result.meters.first { $0.id == "on-demand" }
+                result.meters = dashboard.meters.filter { $0.id != "on-demand" }
+                    + (overage.map { [$0] } ?? dashboard.meters.filter { $0.id == "on-demand" })
+                if overage != nil {
+                    result.notes = dashboard.notes.filter { $0.id != "on-demand" }
+                } else if result.notes.isEmpty {
+                    result.notes = dashboard.notes
+                }
                 result.problem = nil
             }
         }

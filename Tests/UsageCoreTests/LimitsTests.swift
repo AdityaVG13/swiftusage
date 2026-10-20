@@ -1,5 +1,6 @@
 import CommonCrypto
 import Foundation
+import SQLite3
 import Synchronization
 import Testing
 @testable import UsageCore
@@ -633,6 +634,39 @@ struct LimitsTests {
         let unMetered = CursorLimits.limits(["spendLimitUsage": ["totalSpend": 1234]], planInfo: nil, id: "cursor:x", account: nil, plan: "Pro")
         #expect(unMetered.meters.isEmpty)
         #expect(unMetered.notes == [LimitNote(id: "on-demand", label: "On-demand", value: "$12.34 spent")])
+    }
+
+    @Test func cursorFallsBackForIncludedUsageAlongsideConnectOverage() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-cursor-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let url = home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        #expect(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', 'fixture-cursor-token'), ('cursorAuth/stripeMembershipType', 'enterprise');", nil, nil, nil) == SQLITE_OK)
+
+        let cards = await HTTP.$transport.withValue({ request in
+            let body: String = if request.url!.path.hasSuffix("GetPlanInfo") {
+                #"{"planInfo":{"planName":"Enterprise"}}"#
+            } else if request.url!.path.hasSuffix("GetCurrentPeriodUsage") {
+                #"{"spendLimitUsage":{"individualLimit":10000,"individualUsed":1200}}"#
+            } else if request.url!.path == "/api/usage-summary" {
+                #"{"individualUsage":{"plan":{"totalPercentUsed":37}}}"#
+            } else {
+                "{}"
+            }
+            return HTTP.Response(status: 200, headers: [:], data: Data(body.utf8))
+        }) {
+            await CursorLimits().fetch(home: home)
+        }
+        let card = try #require(cards.first)
+        #expect(card.plan == "Enterprise")
+        #expect(card.problem == nil)
+        #expect(card.meters.map(\.id) == ["total", "on-demand"])
+        #expect(card.meters.first?.used == 37)
+        #expect(card.meters.last?.used == 12)
+        #expect(card.meters.last?.limit == 100)
     }
 
     @Test func codexFindsEveryHome() throws {
