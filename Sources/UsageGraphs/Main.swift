@@ -40,9 +40,9 @@ enum Main {
 
         With no options it runs the menu bar app. In a terminal:
 
-          swiftusage --limits [--provider <id>] [--json]   every signed-in account's plan limits
-          swiftusage --dump [--provider <id>] [--cold] [--json]  the numbers the panel shows, per provider
-          swiftusage --version                             the version
+          swiftusage --limits [--provider <id>] [--json]          every signed-in account's plan limits
+          swiftusage --dump [--provider <id>] [--cold] [--json]   the numbers the panel shows, per provider
+          swiftusage --version                                    the version
 
         Providers: \(Provider.allCases.map(\.rawValue).joined(separator: ", "))
 
