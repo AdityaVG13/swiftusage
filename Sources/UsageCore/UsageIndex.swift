@@ -323,15 +323,19 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         guard let cacheURL, let raw = try? Data(contentsOf: cacheURL) else { return }
         let decoder = JSONDecoder()
         // A newer build's index, or one for another folder (a different `CLAUDE_CONFIG_DIR`), isn't this
-        // run's to replace.
-        if let header = try? decoder.decode(CacheHeader.self, from: raw),
-           header.root != root.path || header.version > Format.cacheVersion {
-            savingDisabled = true
+        // run's to replace. Its records may not even decode here, so only its header is read then.
+        func belongsElsewhere(_ header: CacheHeader) -> Bool { header.root != root.path || header.version > Format.cacheVersion }
+        guard let file = try? decoder.decode(CacheFile.self, from: raw) else {
+            if let header = try? decoder.decode(CacheHeader.self, from: raw), belongsElsewhere(header) {
+                savingDisabled = true
+            } else if !savingDisabled {
+                // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
+                UnreadableFile.setAside(cacheURL)
+            }
             return
         }
-        guard let file = try? decoder.decode(CacheFile.self, from: raw) else {
-            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
-            if !savingDisabled { UnreadableFile.setAside(cacheURL) }
+        guard !belongsElsewhere(CacheHeader(version: file.version, root: file.root)) else {
+            savingDisabled = true
             return
         }
         guard file.version >= Format.upgradableCacheVersion else { return }
