@@ -154,13 +154,21 @@ public struct AccountLimits: Codable, Sendable, Equatable, Identifiable {
     }
 
     func metersRolledOver(at now: Date) -> [LimitMeter] {
-        meters.map { meter in
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = .gmt
+        return meters.map { meter in
             guard let reset = meter.resetsAt, reset <= now else { return meter }
             var meter = meter
             meter.used = 0
-            // A daily or weekly window rolls straight into the next one; a five-hour session only starts
-            // with the next message.
-            if let period = meter.period, period >= 86_400 {
+            // A daily, weekly or monthly window rolls straight into the next one; a five-hour session only
+            // starts with the next message.
+            if let period = meter.period, (28 * .day...31 * .day).contains(period) {
+                var months = max(1, Int(saturating: (now.timeIntervalSince(reset) / (32 * .day)).rounded(.down)))
+                while let next = gregorian.date(byAdding: .month, value: months, to: reset), next <= now {
+                    months += 1
+                }
+                meter.resetsAt = gregorian.date(byAdding: .month, value: months, to: reset)
+            } else if let period = meter.period, period >= 86_400 {
                 let missed = (now.timeIntervalSince(reset) / period).rounded(.down) + 1
                 meter.resetsAt = reset.addingTimeInterval(period * missed)
             } else {

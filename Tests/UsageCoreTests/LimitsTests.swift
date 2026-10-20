@@ -209,6 +209,27 @@ struct LimitsTests {
         #expect(fresh.keepingValues(of: previous, now: now) == fresh)
     }
 
+    @Test func calendarBillingMonthIsNotRolledByPreviousMonthsLength() throws {
+        let september = try #require(JSONValue.date("2026-09-01T00:00:00Z"))
+        let october = try #require(JSONValue.date("2026-10-01T00:00:00Z"))
+        let octoberNoon = try #require(JSONValue.date("2026-10-01T12:00:00Z"))
+        let november = try #require(JSONValue.date("2026-11-01T00:00:00Z"))
+        let previous = AccountLimits(id: "cursor:fixture", provider: .cursor, meters: [
+            .percent("total", "Included usage", used: 80, resetsAt: october, period: october.timeIntervalSince(september)),
+        ])
+        let kept = AccountLimits.failed(previous.id, .cursor, "Fixture outage").keepingValues(of: previous, now: octoberNoon)
+        #expect(kept.meters.first?.resetsAt == november)
+
+        let jan31 = try #require(JSONValue.date("2026-01-31T00:00:00Z"))
+        let mar5 = try #require(JSONValue.date("2026-03-05T00:00:00Z"))
+        let mar31 = try #require(JSONValue.date("2026-03-31T00:00:00Z"))
+        let clamped = AccountLimits(id: "cursor:fixture", provider: .cursor, meters: [
+            .percent("total", "Included usage", used: 80, resetsAt: jan31, period: 31 * 86_400),
+        ])
+        let keptClamped = AccountLimits.failed(clamped.id, .cursor, "Fixture outage").keepingValues(of: clamped, now: mar5)
+        #expect(keptClamped.meters.first?.resetsAt == mar31)
+    }
+
     @Test func structurallyUnexpectedResponsesKeepLastGoodLimits() {
         let codex = CodexLimits.limits(["plan_type": "pro", "email": "a@b.c"], id: "codex:fixture", account: "a@b.c")
         #expect(codex.problem == "ChatGPT's usage API sent no limits the app knows.")
