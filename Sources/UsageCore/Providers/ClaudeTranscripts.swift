@@ -36,6 +36,14 @@ public enum ClaudeTranscripts: TranscriptFormat {
                     let relative = subagents + "/" + agent
                     found[relative] = TranscriptInfo.of(root.path + "/" + relative, isSubagent: true)
                 }
+                let workflows = subagents + "/workflows"
+                for workflow in (try? fm.contentsOfDirectory(atPath: root.path + "/" + workflows)) ?? [] where !workflow.hasPrefix(".") {
+                    for agent in (try? fm.contentsOfDirectory(atPath: root.path + "/" + workflows + "/" + workflow)) ?? []
+                    where agent.hasPrefix("agent-") && agent.hasSuffix(".jsonl") {
+                        let relative = workflows + "/" + workflow + "/" + agent
+                        found[relative] = TranscriptInfo.of(root.path + "/" + relative, isSubagent: true)
+                    }
+                }
             }
         }
         return found

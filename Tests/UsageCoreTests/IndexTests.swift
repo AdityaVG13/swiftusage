@@ -82,6 +82,31 @@ struct IndexTests {
         #expect(stats.peakHour == 10)
     }
 
+    @Test func workflowSubagentsAddTokensOnly() async throws {
+        let projects = try TempProjects()
+        try projects.write("-Users-me-app/s1.jsonl", [
+            Lines.user("2026-10-18T10:00:00Z"),
+            Lines.assistant("2026-10-18T10:00:05Z", id: "msg_main", input: 100, output: 10, cacheRead: 0, cacheWrite: 0),
+        ])
+        try projects.write("-Users-me-app/s1/subagents/agent-a.jsonl", [
+            Lines.user("2026-10-18T10:00:10Z"),
+            Lines.assistant("2026-10-18T10:00:15Z", id: "msg_sub", input: 200, output: 20, cacheRead: 0, cacheWrite: 0),
+        ])
+        try projects.write("-Users-me-app/s1/subagents/workflows/wf_1/agent-b.jsonl", [
+            Lines.user("2026-10-18T10:00:20Z"),
+            Lines.assistant("2026-10-18T10:00:25Z", id: "msg_wf", input: 300, output: 30, cacheRead: 0, cacheWrite: 0),
+        ])
+        try projects.write("-Users-me-app/s1/subagents/workflows/wf_1/journal.jsonl", [
+            Lines.assistant("2026-10-18T10:00:30Z", id: "msg_journal", input: 900, output: 90, cacheRead: 0, cacheWrite: 0),
+        ])
+
+        let data = await UsageIndex(projectsURL: projects.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.sessions == 1)
+        #expect(stats.messages == 2)
+        #expect(stats.totalTokens == 660)
+    }
+
     @Test func appendedLinesAreReadIncrementally() async throws {
         let projects = try TempProjects()
         let path = "-p/s.jsonl"
