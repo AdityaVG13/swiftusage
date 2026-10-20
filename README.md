@@ -25,6 +25,8 @@ SwiftUsage needs macOS 26 or later, on Apple silicon or Intel. It runs natively 
 
 The app is signed with a Developer ID and notarized by Apple; the first time it opens, macOS asks once whether to open an app downloaded from the internet. To update, quit it (⋯ → Quit SwiftUsage) and drag the new version over the old one; settings and the saved history carry over. To read Codex's older, compressed history too, install zstd: `brew install zstd`.
 
+To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests and the price list, and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
+
 ## The panel
 
 ### Models
@@ -99,7 +101,7 @@ Each provider is asked for its limits every five minutes and when the panel open
 
 Each Claude login is its own card, named after its organization ("Personal" for the one Anthropic makes for each person). An account several tools are signed in to (Pi on your Claude subscription, say) is one card, marked "Also used by Pi". Claude Desktop keeps its login encrypted with a key macOS guards, so its card asks first: Allow Access… shows macOS's prompt once, and "Always Allow" keeps it silent after that. Antigravity's access tokens last an hour; a new one is fetched with the login's refresh token, which Google doesn't rotate, and kept in memory only. The app's login and `agy`'s for the same Google account are one card. Accounts on a paid plan get the summary of their shared pools; others, which Google turns away from that summary, get each model's quota pooled the same way. Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
 
-Codex and Claude hand out limit resets now and then, each of which refills the session and weekly limits at once (the monthly one on ChatGPT Free). The card shows how many an account has and when the next one lapses, and Use a Reset… spends one after you confirm, with the same request the Codex CLI and Claude Code send: Codex's first to lapse, or the Claude grant Anthropic names as next. It's the only request the app makes that changes anything. Each one carries an ID the provider tells repeats apart by, and if its answer gets lost, trying again sends the same ID, so it can't use a second reset.
+Codex and Claude hand out limit resets now and then, each of which refills the session and weekly limits at once (the monthly one on ChatGPT Free). The card shows how many an account has and when the next one lapses, and Use a Reset… spends one after you confirm, with the same request the Codex CLI and Claude Code send: Codex's first to lapse, or the Claude grant Anthropic names as next. It's the only request the app makes that changes anything. Each one carries an ID the provider tells repeats apart by, and if its answer gets lost, trying again sends the same ID, even after the app restarts, so it can't use a second reset.
 
 `swiftusage --limits` prints every account's limits in the terminal (`--provider <id>` for one), and `--limits --json` as JSON for scripts and agents:
 
@@ -117,7 +119,7 @@ Needs Xcode 26 or later (Swift 6.2) and macOS 26 or later.
 swift test                        # parser, incremental reading, stats, pricing and limits tests
 ```
 
-`swiftusage --dump` prints the panel's numbers for every provider in the terminal (`--provider codex` for one, `--cold` skips the saved indexes):
+`swiftusage --dump` prints the panel's numbers for every provider in the terminal (`--provider codex` for one, `--cold` skips the saved indexes). `--dump --json` writes one provider's numbers per day as JSON, Claude Code's unless `--provider` names another; it's the report `scripts/verify.sh` checks. The terminal commands read the app's saved indexes but never write them.
 
 ```sh
 /Applications/SwiftUsage.app/Contents/MacOS/swiftusage --dump --provider claude
@@ -127,7 +129,7 @@ swift test                        # parser, incremental reading, stats, pricing 
 
 `./scripts/release.sh` makes a release in `dist/`: `SwiftUsage-<version>.dmg` and `.zip`, built for Apple silicon and Intel, signed with the keychain's Developer ID Application certificate and the hardened runtime, notarized by Apple and stapled; their `SHA256SUMS`; the version's notes from `CHANGELOG.md`; and the app's debug symbols, for reading crash reports. It runs the tests first, and checks everything else it needs before it builds. It lays out the disk image with [dmgbuild](https://github.com/dmgbuild/dmgbuild), which it runs through uv (`brew install uv`).
 
-1. Set the version in `VERSION` and describe it under its own heading in `CHANGELOG.md`. The build number counts commits, so commit before releasing.
+1. Set the version in `VERSION` and describe it under its own heading in `CHANGELOG.md` (`## <version>`, alone on its line). Commit everything: the build number counts commits, and the script stops when the working tree has uncommitted changes, so the release is exactly the commit it names.
 2. Once on each Mac, save notarytool's credentials in the keychain as `swiftusage`. With an App Store Connect API key (Users and Access → Integrations → Team Keys, Developer role):
 
    ```sh
@@ -135,15 +137,16 @@ swift test                        # parser, incremental reading, stats, pricing 
    ```
 
    Or with an Apple Account and an app-specific password, `--apple-id <email> --team-id <team ID>`. `NOTARY_PROFILE` picks credentials saved under another name, and `SIGN_IDENTITY` another certificate.
-3. Run `./scripts/release.sh`, then publish what it made:
+3. Run `./scripts/release.sh`. It builds in a temporary folder and replaces `dist/` only once everything succeeded, so a failed run leaves the last release as it was. Then push the commit it built (`dist/COMMIT`) and publish what it made, tagged on that commit:
 
    ```sh
    v=$(<VERSION)
+   git push origin main
    gh release create v$v dist/SwiftUsage-$v.dmg dist/SwiftUsage-$v.zip dist/SHA256SUMS \
-       --title "SwiftUsage $v" --notes-file dist/SwiftUsage-$v-notes.md
+       --target "$(<dist/COMMIT)" --title "SwiftUsage $v" --notes-file dist/SwiftUsage-$v-notes.md
    ```
 
-`./scripts/release.sh --skip-notarization` makes the same files without notarizing them, to check the packaging; Gatekeeper turns those away on other Macs.
+`./scripts/release.sh --skip-notarization` makes the same files without notarizing them, to check the packaging, uncommitted changes and all; Gatekeeper turns those away on other Macs.
 
 ## How the numbers are counted
 

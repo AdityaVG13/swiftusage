@@ -9,5 +9,5 @@ The first release. SwiftUsage needs macOS 26 or later, on Apple silicon or Intel
 - The Limits tab: each signed-in account's session, weekly and per-model limits with reset countdowns and pace, balances and credits, and what was spent today, yesterday and over 30 days.
 - Codex and Claude limit resets: how many an account has, and Use a Reset… to spend one.
 - Pinned limits in the menu bar, with today's tokens and cost; Customize picks the providers, accounts and what the menu bar shows.
-- `swiftusage --limits` and `--dump` print the limits and the numbers in the terminal, with `--json` for scripts.
+- `swiftusage --limits` and `--dump` print the limits and the numbers in the terminal; `--json` writes the limits, or one provider's numbers per day, as JSON for scripts.
 - Signed with a Developer ID and notarized by Apple.
