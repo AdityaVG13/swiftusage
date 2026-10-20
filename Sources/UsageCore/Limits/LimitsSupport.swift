@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Synchronization
 
 /// JSON over HTTPS for the usage APIs. Each request stands alone: no cookies, no cache.
 enum HTTP {
@@ -12,15 +13,27 @@ enum HTTP {
         var ok: Bool { (200..<300).contains(status) }
 
         /// `Retry-After` as seconds from now, whether sent as seconds or as a date.
-        var retryAfter: TimeInterval? {
+        var retryAfter: TimeInterval? { retryAfter() }
+
+        func retryAfter(now: Date = HTTP.now()) -> TimeInterval? {
             guard let value = headers["retry-after"] else { return nil }
             if let seconds = Double(value) { return seconds }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
-            return formatter.date(from: value).map { $0.timeIntervalSinceNow }
+            return formatter.date(from: value).map { $0.timeIntervalSince(now) }
         }
     }
+
+    @TaskLocal static var transport: (@Sendable (URLRequest) async -> Response?)?
+    @TaskLocal static var now: @Sendable () -> Date = Date.init
+
+    private struct Cooldown {
+        var until: Date
+        var wait: TimeInterval
+    }
+
+    private static let cooldowns = Mutex<[String: Cooldown]>([:])
 
     private final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
         func urlSession(
@@ -75,12 +88,34 @@ enum HTTP {
         request.httpMethod = method
         request.httpBody = body
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        guard let (data, response) = try? await session.data(for: request), let http = response as? HTTPURLResponse else { return nil }
-        var lowered: [String: String] = [:]
-        for (name, value) in http.allHeaderFields {
-            if let name = name as? String, let value = value as? String { lowered[name.lowercased()] = value }
+        let key = "\(url.host?.lowercased() ?? "")|\((request.value(forHTTPHeaderField: "Authorization") ?? "").sha256Prefix)|\((request.value(forHTTPHeaderField: "Cookie") ?? "").sha256Prefix)"
+        let start = now()
+        if let until = cooldowns.withLock({ $0[key]?.until }), until > start {
+            return Response(status: 429, headers: ["retry-after": String(Int(until.timeIntervalSince(start).rounded(.up)))], data: Data())
         }
-        return Response(status: http.statusCode, headers: lowered, data: data)
+        let response: Response?
+        if let transport {
+            response = await transport(request)
+        } else {
+            guard let (data, raw) = try? await session.data(for: request), let http = raw as? HTTPURLResponse else { return nil }
+            var lowered: [String: String] = [:]
+            for (name, value) in http.allHeaderFields {
+                if let name = name as? String, let value = value as? String { lowered[name.lowercased()] = value }
+            }
+            response = Response(status: http.statusCode, headers: lowered, data: data)
+        }
+        guard let response else { return nil }
+        let current = now()
+        cooldowns.withLock { cooldowns in
+            if response.status == 429 {
+                let base = response.retryAfter(now: current).flatMap { $0 > 0 ? $0 : nil } ?? 300
+                let wait = min(max(base, (cooldowns[key]?.wait ?? 0) * 2), .hour)
+                cooldowns[key] = Cooldown(until: current.addingTimeInterval(wait), wait: wait)
+            } else {
+                cooldowns[key] = nil
+            }
+        }
+        return response
     }
 }
 

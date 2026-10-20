@@ -23,8 +23,12 @@ public struct PiLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
+        await fetch(folders: Self.folders())
+    }
+
+    func fetch(folders: [URL]) async -> [AccountLimits] {
         var results: [AccountLimits] = []
-        for folder in Self.folders() {
+        for folder in folders {
             guard let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")) else { continue }
             for login in Self.logins(auth) {
                 results.append(await limits(login))

@@ -1,5 +1,6 @@
 import CommonCrypto
 import Foundation
+import Synchronization
 import Testing
 @testable import UsageCore
 
@@ -715,6 +716,62 @@ struct LimitsTests {
         let updated = LimitsSources.update([card, card], with: [], asked: [.claude], missingSince: &missingSince, now: now)
         #expect(updated == [card])
         #expect(missingSince == ["claude:acc|org": now])
+    }
+
+    @Test func rateLimitsCoolDownAndDoubleUpToAnHour() async throws {
+        let clock = Mutex(now)
+        let sent = Mutex<[URLRequest]>([])
+        let reply = Mutex(HTTP.Response(status: 429, headers: ["retry-after": "3600"], data: Data()))
+
+        try await HTTP.$now.withValue({ clock.withLock { $0 } }) {
+            try await HTTP.$transport.withValue({ request in
+                sent.withLock { $0.append(request) }
+                return reply.withLock { $0 }
+            }) {
+                // A 429 with Retry-After: 3600 keeps the next call off the network, including Pi's profile lookup.
+                for _ in 0..<2 {
+                    let codex = await CodexLimits.limits(token: "n1-codex", accountID: "acct", provider: .codex, renew: "Run `codex`.")
+                    #expect(codex.problem == "ChatGPT's usage API answered HTTP 429.")
+                }
+                #expect(sent.withLock { $0.count } == 1)
+
+                let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-n1-pi-\(UUID().uuidString)")
+                defer { try? FileManager.default.removeItem(at: home) }
+                let authURL = home.appendingPathComponent(".pi/agent/auth.json")
+                try FileManager.default.createDirectory(at: authURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try #"{"anthropic":{"type":"oauth","access":"n1-pi-token","expires":9999999999999}}"#
+                    .write(to: authURL, atomically: true, encoding: .utf8)
+                sent.withLock { $0.removeAll() }
+                for _ in 0..<2 {
+                    _ = await PiLimits().fetch(folders: [home.appendingPathComponent(".pi/agent")])
+                }
+                #expect(sent.withLock { $0.count } == 1)
+
+                // Once the cooldown passes, a non-429 answer clears the key.
+                clock.withLock { $0 = $0.addingTimeInterval(3601) }
+                reply.withLock { $0 = HTTP.Response(status: 200, headers: [:], data: Data(#"{"ok":true}"#.utf8)) }
+                let cleared = try #require(await HTTP.get("https://chatgpt.com/backend-api/wham/usage", headers: ["Authorization": "Bearer n1-codex"]))
+                #expect(cleared.status == 200)
+                #expect(sent.withLock { $0.count } == 2)
+
+                // Without Retry-After, a 429 cools down for 5 minutes and each further 429 in a row doubles up to 1 hour.
+                reply.withLock { $0 = HTTP.Response(status: 429, headers: [:], data: Data()) }
+                let headers = ["Authorization": "Bearer n1-codex"]
+                for expected in [300.0, 600, 1200, 2400, 3600, 3600] {
+                    let countBefore = sent.withLock { $0.count }
+                    let first = try #require(await HTTP.get("https://chatgpt.com/backend-api/wham/usage", headers: headers))
+                    #expect(first.status == 429)
+                    #expect(sent.withLock { $0.count } == countBefore + 1)
+
+                    let cached = try #require(await HTTP.get("https://chatgpt.com/backend-api/wham/usage", headers: headers))
+                    #expect(cached.status == 429)
+                    #expect(cached.retryAfter == expected)
+                    #expect(sent.withLock { $0.count } == countBefore + 1)
+
+                    clock.withLock { $0 = $0.addingTimeInterval(expected + 1) }
+                }
+            }
+        }
     }
 }
 
