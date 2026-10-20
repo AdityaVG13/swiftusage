@@ -145,6 +145,7 @@ struct PricingTests {
             if let object = value as? [String: Any] {
                 return object.filter { $0.key != "h" }.mapValues(dropHourField)
             }
+            if let array = value as? [Any] { return array.map(dropHourField) }
             return value
         }
         var file = try #require(dropHourField(JSONSerialization.jsonObject(with: Data(contentsOf: cache))) as? [String: Any])
@@ -158,5 +159,33 @@ struct PricingTests {
         #expect(stats.messages == 4)
         // The transcript still on disk was read again, so its one-hour cache write is known.
         #expect(data.usage.first { $0.bucket == FileRecord.bucket(Timestamp.parse("2026-10-18T12:00:01Z")!) }?.cacheWriteHour == 1000)
+    }
+
+    @Test func reviewUpgradeRetriesUnreadableTranscript() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache.json")
+        let line = #"{"type":"assistant","timestamp":"2026-10-18T10:00:00Z","message":{"id":"hour","model":"claude-opus-5-5","usage":{"cache_creation_input_tokens":1000,"cache_creation":{"ephemeral_1h_input_tokens":1000}}}}"#
+        let transcript = try projects.write("-p/s.jsonl", [line])
+        let first = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await first.refresh()
+        await first.save()
+        var file = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: cache)) as? [String: Any])
+        file["version"] = ClaudeTranscripts.upgradableCacheVersion
+        func dropHour(_ value: Any) -> Any {
+            if let object = value as? [String: Any] {
+                return object.filter { $0.key != "h" }.mapValues(dropHour)
+            }
+            if let array = value as? [Any] { return array.map(dropHour) }
+            return value
+        }
+        try JSONSerialization.data(withJSONObject: dropHour(file)).write(to: cache)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path) }
+        #expect((try? Data(contentsOf: transcript)) == nil)
+        let upgrading = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await upgrading.refresh()
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path)
+        let restored = await upgrading.refresh()
+        #expect(restored.usage.first?.cacheWriteHour == 1000)
     }
 }

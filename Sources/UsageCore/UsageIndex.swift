@@ -243,7 +243,11 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                 for await (key, record, bytes) in group {
                     // A file that couldn't be read (deleted mid-scan, compressed without zstd) keeps its last
                     // summary and is tried again next time.
-                    if let record { records[key] = record }
+                    if let record {
+                        records[key] = record
+                    } else if rereading.contains(key) {
+                        records[key]?.inode = 0
+                    }
                     bytesDone += bytes
                     filesDone += 1
                     progress?(ScanProgress(bytesRead: min(bytesDone, total), bytesTotal: total, filesDone: filesDone, filesTotal: jobs.count))
