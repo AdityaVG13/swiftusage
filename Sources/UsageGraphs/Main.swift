@@ -306,15 +306,54 @@ enum Limits {
 /// `<projects>` inside `<work dir>` in random chunks that split lines, refreshing the index after each
 /// round and reloading it from disk halfway, then writes the incremental and the one-pass results.
 enum Replay {
+    private static let markerName = ".swiftusage-replay"
+
+    private static func resolve(_ path: String) -> String {
+        var url = URL(fileURLWithPath: path).standardizedFileURL
+        var tail: [String] = []
+        let fm = FileManager.default
+        while !fm.fileExists(atPath: url.path) && url.path != "/" {
+            tail.append(url.lastPathComponent)
+            url.deleteLastPathComponent()
+        }
+        var resolved = url.resolvingSymlinksInPath().standardizedFileURL
+        for component in tail.reversed() {
+            resolved.appendPathComponent(component)
+        }
+        return resolved.standardizedFileURL.path
+    }
+
+    private static func contains(_ parent: String, _ child: String) -> Bool {
+        parent == "/" || child.hasPrefix(parent + "/")
+    }
+
     static func run(source: String, work: String, output: String) {
+        let fm = FileManager.default
+        let sourcePath = resolve(source)
+        let workPath = resolve(work)
+        if sourcePath == workPath || contains(sourcePath, workPath) || contains(workPath, sourcePath) {
+            FileHandle.standardError.write(Data("swiftusage: replay work directory \(work) must not overlap projects directory \(source)\n".utf8))
+            exit(2)
+        }
+        let workURL = URL(fileURLWithPath: workPath)
+        let marker = workURL.appendingPathComponent(markerName)
+        if fm.fileExists(atPath: workURL.path) {
+            guard let entries = try? fm.contentsOfDirectory(atPath: workURL.path),
+                  entries.isEmpty || fm.fileExists(atPath: marker.path)
+            else {
+                FileHandle.standardError.write(Data("swiftusage: replay work directory \(work) is not empty\n".utf8))
+                exit(2)
+            }
+            try? fm.removeItem(at: workURL)
+        }
+        try! fm.createDirectory(at: workURL, withIntermediateDirectories: true)
+        fm.createFile(atPath: marker.path, contents: Data())
+
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            let fm = FileManager.default
-            let workURL = URL(fileURLWithPath: work)
-            try? fm.removeItem(at: workURL)
             let projects = workURL.appendingPathComponent("projects")
             let cache = workURL.appendingPathComponent("index.json")
-            let files = UsageIndex.discoverTranscripts(in: URL(fileURLWithPath: source))
+            let files = UsageIndex.discoverTranscripts(in: URL(fileURLWithPath: sourcePath))
             let environment = ProcessInfo.processInfo.environment
             let rounds = environment["REPLAY_ROUNDS"].flatMap(Int.init) ?? 7
             var generator = SplitMix(seed: environment["REPLAY_SEED"].flatMap(UInt64.init) ?? 0x5EED_2026)
