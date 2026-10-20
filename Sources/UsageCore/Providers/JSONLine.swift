@@ -28,8 +28,9 @@ extension [String: Any] {
         return value
     }
 
-    func int(_ key: String) -> Int64 {
-        (self[key] as? NSNumber)?.int64Value ?? 0
+    func int(_ key: String) -> Int64? {
+        guard let value = self[key], !(value is NSNull) else { return 0 }
+        return TokenCount.parse(value)
     }
 }
 

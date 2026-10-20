@@ -101,7 +101,9 @@ public actor OpenCodeSource: UsageSource {
         mutating func read(_ db: SQLiteReader) {
             for table in ["session", "session_v2"] where db.hasTable(table) {
                 db.rows("SELECT id, parent_id, time_created FROM \(table)") { row in
-                    guard let id = row.text(0), sessions[id] == nil else { return }
+                    guard let id = row.text(0), sessions[id] == nil,
+                          Timestamp.seconds(Double(row.int(2)) / 1000) != nil
+                    else { return }
                     sessions[id] = Session(created: row.int(2), parent: row.text(1))
                 }
             }
@@ -142,14 +144,22 @@ public actor OpenCodeSource: UsageSource {
         }
 
         private mutating func add(_ row: SQLiteReader.Row, role: String?, model: String?, provider: String?, reasoningAlwaysSeparate: Bool) {
-            guard let id = row.text(0), let session = row.text(1), role == "user" || role == "assistant" else { return }
+            guard let id = row.text(0), let session = row.text(1), role == "user" || role == "assistant",
+                  Timestamp.seconds(Double(row.int(2)) / 1000) != nil
+            else { return }
             var counts = TokenCounts()
             var cost: Double?
             if role == "assistant" {
                 cost = row.isNull(13) ? nil : row.double(13)
-                counts = Self.tokens(input: row.int(7), output: row.int(8), reasoning: row.int(9), cacheRead: row.int(10),
-                                     cacheWrite: row.int(11), total: row.isNull(12) ? nil : row.int(12),
-                                     provider: provider, reasoningAlwaysSeparate: reasoningAlwaysSeparate)
+                guard let input = row.tokenCount(7), let output = row.tokenCount(8),
+                      let reasoning = row.tokenCount(9), let cacheRead = row.tokenCount(10),
+                      let cacheWrite = row.tokenCount(11),
+                      let total = row.isNull(12) ? .some(nil) : row.tokenCount(12).map(Optional.some),
+                      let parsed = Self.tokens(input: input, output: output, reasoning: reasoning, cacheRead: cacheRead,
+                                               cacheWrite: cacheWrite, total: total,
+                                               provider: provider, reasoningAlwaysSeparate: reasoningAlwaysSeparate)
+                else { return }
+                counts = parsed
             }
             messages[id] = Message(session: session, created: row.int(2), model: model ?? "unknown", tokens: counts, cost: cost)
         }
@@ -158,7 +168,12 @@ public actor OpenCodeSource: UsageSource {
         /// before, OpenAI-style providers kept it inside. When a `total` is recorded it says which: the
         /// sum including reasoning matches it only when reasoning is separate.
         static func tokens(input: Int64, output: Int64, reasoning: Int64, cacheRead: Int64, cacheWrite: Int64,
-                           total: Int64?, provider: String?, reasoningAlwaysSeparate: Bool) -> TokenCounts {
+                           total: Int64?, provider: String?, reasoningAlwaysSeparate: Bool) -> TokenCounts? {
+            guard let input = TokenCount.parse(input), let output = TokenCount.parse(output),
+                  let reasoning = TokenCount.parse(reasoning), let cacheRead = TokenCount.parse(cacheRead),
+                  let cacheWrite = TokenCount.parse(cacheWrite)
+            else { return nil }
+            if let total, TokenCount.parse(total) == nil { return nil }
             let base = input + output + cacheRead + cacheWrite
             let separate: Bool
             if reasoningAlwaysSeparate {

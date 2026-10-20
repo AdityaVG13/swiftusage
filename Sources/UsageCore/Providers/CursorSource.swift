@@ -82,8 +82,9 @@ public actor CursorSource: UsageSource {
                 guard let hex = row.text(0), let json = Data(hex: hex) else { return }
                 meta = try? JSONSerialization.jsonObject(with: json) as? [String: Any]
             }
-            guard let meta, let created = (meta["createdAt"] as? NSNumber)?.doubleValue else { return chat }
-            let start = created / 1000
+            guard let meta, let created = (meta["createdAt"] as? NSNumber)?.doubleValue,
+                  let start = Timestamp.seconds(created / 1000)
+            else { return chat }
             chat.sessions = [start]
             let bucket = FileRecord.bucket(start)
 
@@ -128,11 +129,13 @@ public actor CursorSource: UsageSource {
                 // bubbleId:<composer>:<bubble>; type 1 is the user, 2 the assistant.
                 guard let key = row.text(0), row.int(1) == 1 || row.int(1) == 2 else { return }
                 let composer = key.split(separator: ":").dropFirst().first.map(String.init) ?? ""
-                guard let time = Self.time(row, 2) ?? composers[composer]?.start else { return }
+                guard let time = Self.time(row, 2) ?? composers[composer]?.start,
+                      let input = row.tokenCount(3), let output = row.tokenCount(4)
+                else { return }
                 let bucket = FileRecord.bucket(time)
                 let messageKey = JSONLine.key("cursor-ide", key)
                 chat.messages[messageKey] = bucket
-                let tokens = TokenCounts(input: row.int(3), output: row.int(4))
+                let tokens = TokenCounts(input: input, output: output)
                 if tokens.total > 0 {
                     let model = row.text(5) ?? composers[composer]?.model ?? "cursor"
                     chat.usage[messageKey] = UsageRecord(bucket: bucket, model: model, tokens: tokens)
@@ -146,7 +149,8 @@ public actor CursorSource: UsageSource {
             if row.isNull(column) { return nil }
             if let text = row.text(column), let parsed = Timestamp.parse(text) { return parsed }
             let value = row.double(column)
-            return value > 1e12 ? value / 1000 : value > 1e9 ? value : nil
+            let seconds = value > 1e12 ? value / 1000 : value > 1e9 ? value : nil
+            return seconds.flatMap(Timestamp.seconds)
         }
     }
 }

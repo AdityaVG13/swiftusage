@@ -35,22 +35,24 @@ public enum PiTranscripts: TranscriptFormat {
         case "message":
             guard let message = entry["message"] as? [String: Any], let role = message["role"] as? String else { break }
             // The message's own time is when the request started; the entry's is when it was written.
-            let time = (message["timestamp"] as? NSNumber).map { $0.doubleValue / 1000 } ?? timestamp
-            if role == "user" || role == "assistant", record.messages[key] == nil {
-                record.messages[key] = FileRecord.bucket(time)
-            }
+            let rawTime = (message["timestamp"] as? NSNumber).map { $0.doubleValue / 1000 } ?? timestamp
+            guard let time = Timestamp.seconds(rawTime) else { break }
             if role == "assistant", let model = message["model"] as? String { record.model = model }
             if let usage = message["usage"] as? [String: Any] {
+                guard let counts = tokens(usage) else { break }
                 let usageKey = (message["responseId"] as? String).map { JSONLine.key("response", $0) } ?? key
                 record.usage[usageKey] = UsageRecord(bucket: FileRecord.bucket(time), model: message["model"] as? String ?? record.model ?? "unknown",
-                                                     tokens: tokens(usage), cost: cost(usage))
+                                                     tokens: counts, cost: cost(usage))
+            }
+            if role == "user" || role == "assistant", record.messages[key] == nil {
+                record.messages[key] = FileRecord.bucket(time)
             }
         case "compaction", "branch_summary":
             // Summaries are model calls too. A compaction's retained tail repeats earlier entries and
             // isn't read.
-            if let usage = entry["usage"] as? [String: Any] {
+            if let usage = entry["usage"] as? [String: Any], let counts = tokens(usage) {
                 let model = entry[path: "details", "modelId"] as? String ?? record.model ?? "unknown"
-                record.usage[key] = UsageRecord(bucket: FileRecord.bucket(timestamp), model: model, tokens: tokens(usage), cost: cost(usage))
+                record.usage[key] = UsageRecord(bucket: FileRecord.bucket(timestamp), model: model, tokens: counts, cost: cost(usage))
             }
         default:
             break
@@ -64,7 +66,10 @@ public enum PiTranscripts: TranscriptFormat {
     }
 
     /// `input` is already uncached and `reasoning` is part of `output`.
-    private static func tokens(_ usage: [String: Any]) -> TokenCounts {
-        TokenCounts(input: usage.int("input"), output: usage.int("output"), cacheRead: usage.int("cacheRead"), cacheWrite: usage.int("cacheWrite"))
+    private static func tokens(_ usage: [String: Any]) -> TokenCounts? {
+        guard let input = usage.int("input"), let output = usage.int("output"),
+              let cacheRead = usage.int("cacheRead"), let cacheWrite = usage.int("cacheWrite")
+        else { return nil }
+        return TokenCounts(input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite)
     }
 }

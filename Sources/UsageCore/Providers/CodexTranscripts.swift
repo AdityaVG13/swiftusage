@@ -87,28 +87,28 @@ public enum CodexTranscripts: TranscriptFormat {
             context["tier"] = settings["service_tier"] as? String
         case "token_usage_record":
             context["records"] = "1"
-            guard let usage = payload["usage"] as? [String: Any], let time, isOwnTurn else { break }
+            guard let usage = payload["usage"] as? [String: Any], let counts = tokens(usage), let time, isOwnTurn else { break }
             if let thread = payload["thread_id"] as? String, let own = context["thread"], thread != own { break }
             let key = (payload["response_id"] as? String).map { JSONLine.key("codex", $0) } ?? lineKey
-            record.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: tokens(usage),
+            record.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
                                             speed: speed(context["tier"]))
         case "token_count":
             // Superseded by per-response records once a file has them.
             guard context["records"] == nil, let info = payload["info"] as? [String: Any],
-                  let total = info["total_token_usage"] as? [String: Any], let last = info["last_token_usage"] as? [String: Any], let time
+                  let total = info["total_token_usage"] as? [String: Any], let last = info["last_token_usage"] as? [String: Any],
+                  let running = tokens(total), let counts = tokens(last), let time
             else { break }
-            let running = tokens(total)
             guard running != record.runningTotal else { break }
             record.runningTotal = running
             guard isOwnTurn else { break }
-            record.usage[lineKey] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: tokens(last),
+            record.usage[lineKey] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
                                                 speed: speed(context["tier"]))
         case "item_completed":
             guard let item = payload["item"] as? [String: Any], let itemType = item["type"] as? String,
                   itemType == "UserMessage" || itemType == "AgentMessage", isOwnTurn
             else { break }
             let started = (item["started_at_ms"] as? NSNumber).map { $0.doubleValue / 1000 }
-            guard let at = started ?? time else { break }
+            guard let rawAt = started ?? time, let at = Timestamp.seconds(rawAt) else { break }
             // Migrated rollouts number items per thread (`item-1`), so IDs are only unique within one.
             let key = (item["id"] as? String).map { JSONLine.key("codex-item", context["thread"] ?? "", $0) } ?? lineKey
             if record.messages[key] == nil { record.messages[key] = FileRecord.bucket(at) }
@@ -131,10 +131,11 @@ public enum CodexTranscripts: TranscriptFormat {
     }
 
     /// `input_tokens` includes cache reads and writes; `output_tokens` includes reasoning.
-    private static func tokens(_ usage: [String: Any]) -> TokenCounts {
-        let cacheRead = usage.int("cached_input_tokens")
-        let cacheWrite = usage.int("cache_write_input_tokens")
-        return TokenCounts(input: max(0, usage.int("input_tokens") - cacheRead - cacheWrite), output: usage.int("output_tokens"),
+    private static func tokens(_ usage: [String: Any]) -> TokenCounts? {
+        guard let input = usage.int("input_tokens"), let output = usage.int("output_tokens"),
+              let cacheRead = usage.int("cached_input_tokens"), let cacheWrite = usage.int("cache_write_input_tokens")
+        else { return nil }
+        return TokenCounts(input: max(0, input - cacheRead - cacheWrite), output: output,
                            cacheRead: cacheRead, cacheWrite: cacheWrite)
     }
 }

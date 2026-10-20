@@ -60,6 +60,15 @@ final class SQLiteReader {
         func int(_ column: Int32) -> Int64 { sqlite3_column_int64(statement, column) }
         func double(_ column: Int32) -> Double { sqlite3_column_double(statement, column) }
 
+        func tokenCount(_ column: Int32) -> Int64? {
+            switch sqlite3_column_type(statement, column) {
+            case SQLITE_NULL: return 0
+            case SQLITE_INTEGER: return TokenCount.parse(int(column))
+            case SQLITE_FLOAT: return TokenCount.parse(double(column))
+            default: return nil
+            }
+        }
+
         func text(_ column: Int32) -> String? {
             guard let pointer = sqlite3_column_text(statement, column) else { return nil }
             return String(cString: pointer)

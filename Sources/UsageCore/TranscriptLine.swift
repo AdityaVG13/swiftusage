@@ -288,7 +288,7 @@ struct LineParser {
         while i < end, p[i] >= zero, p[i] <= nine {
             // No response comes near a trillion tokens, so a count past it is corrupt. Capped there, no
             // number of them can overflow the sums they go into.
-            value = min(value * 10 + Int64(p[i] - zero), 1_000_000_000_000)
+            value = min(value * 10 + Int64(p[i] - zero), TokenCount.max)
             sawDigit = true
             i += 1
         }
@@ -319,7 +319,30 @@ func fnv1a(_ string: String) -> UInt64 {
     }
 }
 
+enum TokenCount {
+    static let max: Int64 = 1_000_000_000_000
+
+    static func parse(_ value: Int64) -> Int64? {
+        0 <= value && value <= max ? value : nil
+    }
+
+    static func parse(_ value: Double) -> Int64? {
+        guard let int = Int64(exactly: value) else { return nil }
+        return parse(int)
+    }
+
+    static func parse(_ value: Any?) -> Int64? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        return parse(number.doubleValue)
+    }
+}
+
 enum Timestamp {
+    /// Epoch seconds when finite and representable as a quarter-hour bucket (`Int32`).
+    static func seconds(_ value: Double) -> Double? {
+        value.isFinite && abs(value) < Double(Int32.max) * 900 ? value : nil
+    }
+
     /// Parses `YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]` into seconds since 1970 (UTC when no zone is given).
     static func parse(_ p: UnsafePointer<UInt8>, count: Int) -> Double? {
         guard count >= 19 else { return nil }
@@ -355,7 +378,7 @@ enum Timestamp {
             let offset = Double(oh * 3600 + om * 60)
             seconds += p[k] == minus ? offset : -offset
         }
-        return seconds
+        return Self.seconds(seconds)
     }
 
     static func parse(_ string: String) -> Double? {

@@ -119,12 +119,46 @@ struct ProviderTests {
     @Test func openCodeReasoningIsAddedOnlyWhenSeparate() {
         typealias Database = OpenCodeSource.Database
         // Newer builds: reasoning beside output, and the total says so.
-        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 100, cacheWrite: 0, total: 118, provider: "openai", reasoningAlwaysSeparate: false).output == 8)
+        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 100, cacheWrite: 0, total: 118, provider: "openai", reasoningAlwaysSeparate: false)?.output == 8)
         // Older OpenAI-style builds: reasoning already inside output.
-        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 100, cacheWrite: 0, total: 115, provider: "openai", reasoningAlwaysSeparate: false).output == 5)
+        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 100, cacheWrite: 0, total: 115, provider: "openai", reasoningAlwaysSeparate: false)?.output == 5)
         // No total recorded: Google kept it separate.
-        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "google", reasoningAlwaysSeparate: false).output == 8)
-        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "openai", reasoningAlwaysSeparate: false).output == 5)
+        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "google", reasoningAlwaysSeparate: false)?.output == 8)
+        #expect(Database.tokens(input: 10, output: 5, reasoning: 3, cacheRead: 0, cacheWrite: 0, total: nil, provider: "openai", reasoningAlwaysSeparate: false)?.output == 5)
+    }
+
+    @Test func corruptNumbersAreSkippedWithoutTrapping() async throws {
+        let home = try TempProjects()
+        var db: OpaquePointer?
+        #expect(sqlite3_open(home.root.appendingPathComponent("opencode.db").path, &db) == SQLITE_OK)
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        run("CREATE TABLE session (id TEXT, parent_id TEXT, time_created INTEGER)")
+        run("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+        run("INSERT INTO session VALUES ('s', NULL, 1792317600000)")
+        for (id, data) in [
+            ("a", #"{"role":"assistant","modelID":"gpt-5","tokens":{"input":100,"output":10}}"#),
+            ("overflow", #"{"role":"assistant","modelID":"gpt-5","tokens":{"input":9223372036854775807,"output":1}}"#),
+            ("b", #"{"role":"assistant","modelID":"gpt-5","tokens":{"input":200,"output":20}}"#),
+        ] {
+            run("INSERT INTO message VALUES ('\(id)', 's', 1792317601000, 1792317601000, '\(data)')")
+        }
+        sqlite3_close(db)
+
+        let openCode = await OpenCodeSource(root: home.root).refresh()
+        #expect(openCode.usage.count == 2)
+        #expect(openCode.usage.reduce(0) { $0 + $1.tokens.total } == 330)
+
+        let start = Timestamp.parse("2026-10-18T10:00:00Z")! * 1000
+        try home.write("%2FUsers%2Fme/s1/updates.jsonl", [
+            #"{"params":{"sessionId":"s1","_meta":{"agentTimestampMs":\#(start)},"update":{"sessionUpdate":"user_message_chunk","_meta":{"promptIndex":0}}}}"#,
+            #"{"params":{"sessionId":"s1","_meta":{"agentTimestampMs":1e300},"update":{"sessionUpdate":"user_message_chunk","_meta":{"promptIndex":1}}}}"#,
+            #"{"params":{"sessionId":"s1","_meta":{"agentTimestampMs":\#(start + 1)},"update":{"sessionUpdate":"turn_completed","prompt_id":"bad","usage":{"inputTokens":10,"outputTokens":5,"modelCalls":20000}}}}"#,
+            #"{"params":{"sessionId":"s1","_meta":{"agentTimestampMs":\#(start + 2)},"update":{"sessionUpdate":"turn_completed","prompt_id":"ok","usage":{"inputTokens":100,"outputTokens":10,"modelCalls":1}}}}"#,
+        ])
+        let grok = await TranscriptIndex<GrokTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(grok.usage.count == 1)
+        #expect(grok.usage.first?.tokens == TokenCounts(input: 100, output: 10))
+        #expect(grok.messageBuckets.values.reduce(0, +) == 2)
     }
 
     @Test func protobufFieldsAndTimestamps() throws {

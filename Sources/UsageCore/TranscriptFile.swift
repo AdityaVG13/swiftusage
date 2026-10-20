@@ -91,7 +91,7 @@ public struct FileRecord: Codable, Sendable {
     static let quarterHour: Double = 900
 
     static func bucket(_ timestamp: Double) -> Int32 {
-        Int32(clamping: Int((timestamp / quarterHour).rounded(.down)))
+        Int32(clamping: Int(saturating: (timestamp / quarterHour).rounded(.down)))
     }
 
     mutating func ingest(_ line: TranscriptLine, lineOffset: UInt64, pathHash: UInt64) {

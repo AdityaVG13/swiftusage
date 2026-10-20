@@ -44,13 +44,14 @@ public enum MuseTranscripts: TranscriptFormat {
             let key = JSONLine.key("turn", turn)
             if record.messages[key] == nil { record.messages[key] = bucket }
         }
-        if let event = usageEvent(in: entry), let usage = event["usage"] as? [String: Any] {
+        if let event = usageEvent(in: entry), let usage = event["usage"] as? [String: Any],
+           let prompt = event.int("promptTokens"), let output = usage.int("outputTokens"),
+           let cacheReadPrimary = usage.int("cacheReadTokens"), let cached = usage.int("cachedTokens"),
+           let cacheWrite = usage.int("cacheWriteTokens") {
             let id = (event["id"] as? String) ?? (entry["id"] as? String)
             let key = id.map { JSONLine.key("usage", $0) } ?? lineKey
-            let cacheRead = usage.int("cacheReadTokens") > 0 ? usage.int("cacheReadTokens") : usage.int("cachedTokens")
-            let cacheWrite = usage.int("cacheWriteTokens")
-            let prompt = event.int("promptTokens")
-            let tokens = TokenCounts(input: max(0, prompt - cacheRead - cacheWrite), output: usage.int("outputTokens"),
+            let cacheRead = cacheReadPrimary > 0 ? cacheReadPrimary : cached
+            let tokens = TokenCounts(input: max(0, prompt - cacheRead - cacheWrite), output: output,
                                      cacheRead: cacheRead, cacheWrite: cacheWrite)
             record.usage[key] = UsageRecord(bucket: bucket, model: event["modelId"] as? String ?? record.model ?? "muse", tokens: tokens)
             if record.messages[key] == nil { record.messages[key] = bucket }
@@ -84,7 +85,7 @@ public enum MuseTranscripts: TranscriptFormat {
             if let string = value as? String, let parsed = Timestamp.parse(string) { return parsed }
             if let number = value as? NSNumber {
                 let seconds = number.doubleValue > 1e12 ? number.doubleValue / 1000 : number.doubleValue
-                if seconds > 1e9 { return seconds }
+                if seconds > 1e9, let valid = Timestamp.seconds(seconds) { return valid }
             }
         }
         return nil

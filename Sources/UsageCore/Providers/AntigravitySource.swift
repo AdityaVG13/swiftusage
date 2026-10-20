@@ -94,8 +94,12 @@ public actor AntigravitySource: UsageSource {
                 let stepTime = position < responseTimes.count ? responseTimes[position] : nil
                 guard let time = stepTime ?? generation.message(9)?.message(4)?.timestamp else { return }
                 // Input excludes cached tokens; output includes thinking.
-                let tokens = TokenCounts(input: counts.int(2) ?? 0, output: counts.int(3) ?? 0,
-                                         cacheRead: counts.int(5) ?? 0, cacheWrite: counts.int(4) ?? 0)
+                guard let input = TokenCount.parse(counts.int(2) ?? 0),
+                      let output = TokenCount.parse(counts.int(3) ?? 0),
+                      let cacheRead = TokenCount.parse(counts.int(5) ?? 0),
+                      let cacheWrite = TokenCount.parse(counts.int(4) ?? 0)
+                else { return }
+                let tokens = TokenCounts(input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite)
                 guard tokens.total > 0 else { return }
                 let key = counts.string(11).map { JSONLine.key("antigravity-response", $0) }
                     ?? JSONLine.key("antigravity", id, "generation", String(row.int(0)))

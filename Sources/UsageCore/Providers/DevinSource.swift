@@ -94,8 +94,8 @@ public actor DevinSource: UsageSource {
         mutating func read(_ db: SQLiteReader) {
             guard db.hasTable("sessions"), db.hasTable("message_nodes") else { return }
             db.rows("SELECT id, created_at, hidden, model FROM sessions") { row in
-                guard let id = row.text(0) else { return }
-                sessions[id] = Session(created: row.double(1), hidden: row.int(2) != 0, model: row.text(3) ?? "unknown")
+                guard let id = row.text(0), let created = Timestamp.seconds(row.double(1)) else { return }
+                sessions[id] = Session(created: created, hidden: row.int(2) != 0, model: row.text(3) ?? "unknown")
             }
             // Only user and assistant rows matter; the role is near the start of the JSON, so tool
             // results (often whole files) are skipped without being parsed.
@@ -115,11 +115,17 @@ public actor DevinSource: UsageSource {
                 guard let session = row.text(1), let role = row.text(4) else { return }
                 let id = row.text(3) ?? "\(session)#\(row.int(0))"
                 guard messages[id] == nil else { return }
-                let created = row.text(6).flatMap(Timestamp.parse) ?? row.double(2)
+                guard let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2)) else { return }
                 let isAssistant = role == "assistant"
-                let tokens = isAssistant
-                    ? TokenCounts(input: row.int(8), output: row.int(9), cacheRead: row.int(10), cacheWrite: row.int(11))
-                    : TokenCounts()
+                let tokens: TokenCounts
+                if isAssistant {
+                    guard let input = row.tokenCount(8), let output = row.tokenCount(9),
+                          let cacheRead = row.tokenCount(10), let cacheWrite = row.tokenCount(11)
+                    else { return }
+                    tokens = TokenCounts(input: input, output: output, cacheRead: cacheRead, cacheWrite: cacheWrite)
+                } else {
+                    tokens = TokenCounts()
+                }
                 messages[id] = Message(session: session, created: created, counts: isAssistant || row.int(5) != 0,
                                        model: row.text(7), tokens: tokens)
             }
