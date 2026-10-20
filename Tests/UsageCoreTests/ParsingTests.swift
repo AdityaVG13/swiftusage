@@ -84,6 +84,7 @@ struct ParsingTests {
         #expect(ModelName.display("gemini-3-pro-preview") == "Gemini 3 Pro Preview")
         #expect(ModelName.display("grok-code-fast-1") == "Grok Code Fast 1")
         #expect(ModelName.display("deepseek-v3.2") == "DeepSeek V3.2")
+        #expect(ModelName.display("deepseek-v3") == "DeepSeek V3")
         // Reasoning effort is dropped, so one model reads the same whichever tool ran it.
         #expect(ModelName.display("gpt-6-1-sol-xhigh") == "GPT-6.1 Sol")
         #expect(ModelName.display("claude-opus-5-5-xhigh-fast") == "Opus 5.5")

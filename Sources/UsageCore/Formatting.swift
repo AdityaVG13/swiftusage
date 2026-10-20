@@ -19,12 +19,16 @@ public enum ModelName {
         var name = id.lowercased()
         if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
         if let slash = name.lastIndex(of: "/") { name = String(name[name.index(after: slash)...]) }
-        if let anthropic = name.range(of: "anthropic.") { name = String(name[anthropic.upperBound...]) }
         if let at = name.firstIndex(of: "@") { name = String(name[..<at]) }
-        if let dash = name.range(of: "-v", options: .backwards) {
-            let pieces = name[dash.upperBound...].split(separator: ":", omittingEmptySubsequences: false)
-            if (1...2).contains(pieces.count), pieces.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) {
-                name = String(name[..<dash.lowerBound])
+        // Bedrock's `us.anthropic.claude-haiku-4-5-20251001-v1:0`: a region, the vendor, then a version of
+        // its own after the model's. Other models keep a `-v3` that's part of their name (`deepseek-v3`).
+        if let anthropic = name.range(of: "anthropic.") {
+            name = String(name[anthropic.upperBound...])
+            if let dash = name.range(of: "-v", options: .backwards) {
+                let pieces = name[dash.upperBound...].split(separator: ":", omittingEmptySubsequences: false)
+                if (1...2).contains(pieces.count), pieces.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) {
+                    name = String(name[..<dash.lowerBound])
+                }
             }
         }
         if name.hasPrefix("claude-") { name.removeFirst("claude-".count) }
