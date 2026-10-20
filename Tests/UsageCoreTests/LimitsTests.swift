@@ -233,6 +233,20 @@ struct LimitsTests {
         #expect(waiting.waitingOn == Keychain.Item(service: "gemini", account: "antigravity"))
     }
 
+    @Test func mixedAntigravityDiscoveryRetainsAWaitingItem() async {
+        let nowhere = URL(fileURLWithPath: "/tmp/nonexistent-swiftusage-agy-\(UUID().uuidString)")
+        let expired = #"{"token":{"access_token":"app","expiry":"2026-08-15T14:39:42Z"}}"#
+        let keychain: @Sendable (Keychain.Item) -> Keychain.Reading = { item in
+            item.account == "antigravity" ? .password(expired) : .needsPermission
+        }
+        let found = AntigravityLimits.logins(home: nowhere, keychain: keychain)
+        #expect(found.logins.count == 1)
+        #expect(found.waitingOn == Keychain.Item(service: "gemini", account: "antigravity-cli"))
+        let cards = await AntigravityLimits().fetch(home: nowhere, keychain: keychain)
+        #expect(cards.map(\.id) == ["antigravity:" + "app".sha256Prefix, "antigravity:keychain"])
+        #expect(cards.last?.action == .allowKeychain)
+    }
+
     @Test func antigravityPoolsItsQuotas() {
         // The summary: shared buckets by exact ID, the first answer winning, plus Argon's own week.
         let first = object(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.75,"resetTime":"2026-10-19T20:00:00Z"},{"bucketId":"gemini-image-5h","remainingFraction":0}]},{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"argon","window":"weekly","remainingFraction":0.5}]}]}"#)

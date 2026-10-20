@@ -48,13 +48,11 @@ public actor AntigravityLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
-        let (logins, waitingOn) = Self.logins()
-        if logins.isEmpty, let item = waitingOn {
-            let id = "antigravity:keychain"
-            Keychain.wait(id, on: item)
-            return [AccountLimits(id: id, provider: provider, problem: "To see these limits, allow access to Antigravity's login and choose Always Allow.",
-                                  action: .allowKeychain)]
-        }
+        await fetch(home: .home, keychain: Keychain.password)
+    }
+
+    func fetch(home: URL = .home, keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password) async -> [AccountLimits] {
+        let (logins, waitingOn) = Self.logins(home: home, keychain: keychain)
         var results: [AccountLimits] = []
         var seen: Set<String> = []
         for login in logins {
@@ -63,6 +61,12 @@ public actor AntigravityLimits: LimitsSource {
             let id = "antigravity:" + (session.email?.lowercased() ?? (login.refresh ?? login.access ?? "").sha256Prefix)
             guard seen.insert(id).inserted else { continue }
             results.append(await limits(session, id: id, provider: provider))
+        }
+        if let item = waitingOn {
+            let id = "antigravity:keychain"
+            Keychain.wait(id, on: item)
+            results.append(AccountLimits(id: id, provider: provider, problem: "To see these limits, allow access to Antigravity's login and choose Always Allow.",
+                                         action: .allowKeychain))
         }
         return results
     }
