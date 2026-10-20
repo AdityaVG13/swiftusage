@@ -32,8 +32,9 @@ final class UsageStore {
     /// Counts stats builds, so one that finishes after a newer one is dropped.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var applyGeneration = 0
-    /// The local day the stats were last built on; they're rebuilt on a new day even if no history changed.
+    /// The local day and time zone the stats were last built on; they're rebuilt on a new day or zone even if no history changed.
     @ObservationIgnored private var statsDay: Int?
+    @ObservationIgnored private var statsTimeZone: String?
 
     init(preferences: Preferences) {
         self.preferences = preferences
@@ -56,6 +57,11 @@ final class UsageStore {
             }
         }
         timer?.tolerance = 30
+
+        NotificationCenter.default.addObserver(forName: NSNotification.Name.NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
+            NSTimeZone.resetSystemTimeZone()
+            Task { @MainActor in await self?.apply() }
+        }
 
         // Quit, logout and shutdown all pass through here; give the indexes a moment to reach disk.
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [sources] _ in
@@ -190,9 +196,12 @@ final class UsageStore {
         applyGeneration += 1
         let applyID = applyGeneration
         let snapshot = data
-        let today = DayClock().day(of: Date().timeIntervalSince1970)
-        if rebuildingStats || today != statsDay {
+        let clock = DayClock()
+        let today = clock.day(of: Date().timeIntervalSince1970)
+        let timeZone = clock.timeZone.identifier
+        if rebuildingStats || today != statsDay || timeZone != statsTimeZone {
             statsDay = today
+            statsTimeZone = timeZone
             await buildStats(snapshot)
             guard applyID == applyGeneration else { return }
         }
