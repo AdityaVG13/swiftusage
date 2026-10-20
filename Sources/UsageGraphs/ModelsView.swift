@@ -169,6 +169,10 @@ private struct TokenChart: View {
             }
         }
         .animation(Theme.Motion.hover, value: hovered == nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(data.bucketDays == 1 ? "Tokens per day" : "Tokens per week")
+        .accessibilityValue(data.buckets.isEmpty ? "No usage in this period" : "\(data.buckets.count) \(data.bucketDays == 1 ? "days" : "weeks") with usage")
+        .accessibilityChartDescriptor(TokenChartDescriptor(data: data))
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .onContinuousHover { phase in
             guard case .active(let point) = phase else { return setHover(nil) }
@@ -271,6 +275,29 @@ private struct TokenChart: View {
         let breakdown = entry.segments.sorted { $0.tokens > $1.tokens }.prefix(2)
             .map { "\(data.series[$0.series]) \(Format.compact($0.tokens))" }.joined(separator: ", ")
         state.chartHover = "\(label) · \(Format.compact(entry.total)) tokens · \(breakdown)"
+    }
+}
+
+/// The chart's bars for VoiceOver's chart navigation: a series per model, the rest as one.
+private struct TokenChartDescriptor: AXChartDescriptorRepresentable {
+    let data: TokenChartData
+
+    func makeChartDescriptor() -> AXChartDescriptor {
+        let weekly = data.bucketDays > 1
+        func label(_ day: Int) -> String {
+            (weekly ? "Week of " : "") + DayClock().date(of: day).formatted(.dateTime.month(.abbreviated).day())
+        }
+        let x = AXCategoricalDataAxisDescriptor(title: weekly ? "Week" : "Day", categoryOrder: data.buckets.map { label($0.day) })
+        let y = AXNumericDataAxisDescriptor(title: "Tokens", range: 0...Double(max(data.ticks.last ?? 1, 1)),
+                                            gridlinePositions: data.ticks.map(Double.init)) { Format.compact(Int64($0)) + " tokens" }
+        let series = data.series.indices.map { index in
+            AXDataSeriesDescriptor(name: index < data.colors.count ? data.series[index] : "Other models", isContinuous: false,
+                                   dataPoints: data.buckets.map { bucket in
+                                       AXDataPoint(x: label(bucket.day), y: Double(bucket.segments.first { $0.series == index }?.tokens ?? 0))
+                                   })
+        }
+        return AXChartDescriptor(title: weekly ? "Tokens per week" : "Tokens per day", summary: nil, xAxis: x, yAxis: y,
+                                 additionalAxes: [], series: series)
     }
 }
 

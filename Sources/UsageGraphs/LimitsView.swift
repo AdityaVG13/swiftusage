@@ -196,6 +196,10 @@ private struct MeterRow: View {
             }
             .monospacedDigit()
             .frame(height: 20)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(meter.label)
+            .accessibilityValue(LimitText.facts(meter, pace: pace, now: context.date).joined(separator: ", ")
+                                + (limits.isPinned(account, meter) ? ", shown in the menu bar" : ""))
             .onChange(of: hovering) { _, inside in
                 state.chartHover = inside ? LimitText.details(meter, pace: pace, now: context.date) : nil
             }
@@ -354,7 +358,12 @@ enum LimitText {
 
     /// The caption for a limit under the pointer: what's used, when it resets and where the pace leads.
     static func details(_ meter: LimitMeter, pace: Pace, now: Date = Date()) -> String {
-        var parts = [meter.label]
+        ([meter.label] + facts(meter, pace: pace, now: now)).joined(separator: " · ")
+    }
+
+    /// What `details` says after the limit's name, which VoiceOver reads as the row's value.
+    static func facts(_ meter: LimitMeter, pace: Pace, now: Date = Date()) -> [String] {
+        var parts: [String] = []
         switch meter.unit {
         // Rounded down, as in the row beside it.
         case .percent: parts.append(String(format: "%.0f%% used", meter.used.rounded(.down)))
@@ -376,7 +385,7 @@ enum LimitText {
         case .tight, .fine:
             if let atReset = pace.atReset { parts.append(String(format: "on pace for ~%.0f%% by then", min(atReset, 1) * 100)) }
         }
-        return parts.joined(separator: " · ")
+        return parts
     }
 
     static func countdown(_ interval: TimeInterval) -> String {

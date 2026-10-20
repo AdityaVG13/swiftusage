@@ -50,6 +50,10 @@ struct HeatmapView: View {
             }
         }
         .frame(width: Theme.Layout.heatmapWidth, height: Theme.Layout.heatmapHeight)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Activity")
+        .accessibilityValue(summary(start: start))
+        .accessibilityChartDescriptor(HeatmapChart(days: daysInView(start: start)))
         .onContinuousHover { phase in
             switch phase {
             case .active(let point):
@@ -59,6 +63,21 @@ struct HeatmapView: View {
                 if state.hoveredDay != nil { state.hoveredDay = nil }
             }
         }
+    }
+
+    /// Each day shown that's in the selected range, with its messages, for VoiceOver.
+    private func daysInView(start: Int) -> [(date: String, messages: Int)] {
+        let first = max(start, stats.firstDay)
+        guard first <= stats.today else { return [] }
+        return (first...stats.today).map { day in
+            (DayClock().date(of: day).formatted(.dateTime.month(.abbreviated).day()), stats.days[day]?.messages ?? 0)
+        }
+    }
+
+    private func summary(start: Int) -> String {
+        let days = daysInView(start: start).filter { $0.messages > 0 }
+        guard let busiest = days.max(by: { $0.messages < $1.messages }) else { return "No messages in view" }
+        return "\(days.count) \(days.count == 1 ? "day" : "days") with messages, the most on \(busiest.date): \(Format.grouped(busiest.messages))"
     }
 
     private func label(_ text: String) -> Text {
@@ -113,6 +132,20 @@ struct HeatmapView: View {
         }
         let level = thresholds.firstIndex { messages <= $0 } ?? 3
         return Theme.heat[level]
+    }
+}
+
+/// The heatmap's days for VoiceOver's chart navigation.
+private struct HeatmapChart: AXChartDescriptorRepresentable {
+    let days: [(date: String, messages: Int)]
+
+    func makeChartDescriptor() -> AXChartDescriptor {
+        let most = Double(days.map(\.messages).max() ?? 0)
+        let x = AXCategoricalDataAxisDescriptor(title: "Day", categoryOrder: days.map(\.date))
+        let y = AXNumericDataAxisDescriptor(title: "Messages", range: 0...max(most, 1), gridlinePositions: []) { "\(Int($0)) messages" }
+        let series = AXDataSeriesDescriptor(name: "Messages", isContinuous: false,
+                                            dataPoints: days.map { AXDataPoint(x: $0.date, y: Double($0.messages)) })
+        return AXChartDescriptor(title: "Activity", summary: nil, xAxis: x, yAxis: y, additionalAxes: [], series: [series])
     }
 }
 
