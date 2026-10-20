@@ -149,7 +149,12 @@ public struct AccountLimits: Codable, Sendable, Equatable, Identifiable {
         kept.action = action
         kept.sharedWith = sharedWith
         kept.plan = plan ?? previous.plan
-        kept.meters = previous.meters.map { meter in
+        kept.meters = previous.metersRolledOver(at: now)
+        return kept
+    }
+
+    func metersRolledOver(at now: Date) -> [LimitMeter] {
+        meters.map { meter in
             guard let reset = meter.resetsAt, reset <= now else { return meter }
             var meter = meter
             meter.used = 0
@@ -163,7 +168,6 @@ public struct AccountLimits: Codable, Sendable, Equatable, Identifiable {
             }
             return meter
         }
-        return kept
     }
 }
 
@@ -225,6 +229,7 @@ public enum LimitsSources {
             guard !renamed(account), account.hasValues, now.timeIntervalSince(account.updated) < .day else { continue }
             let since = missingSince[account.id] ?? now
             var account = account
+            account.meters = account.metersRolledOver(at: now)
             if now.timeIntervalSince(since) >= missingGrace {
                 account.problem = "Couldn't find this login. Sign in again if you signed out."
             }

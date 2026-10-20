@@ -615,4 +615,14 @@ struct LimitsTests {
                                      asked: [.claude], missingSince: &missingSince, now: now)
         #expect(Set(cards.map(\.id)) == ["claude:b", "claude:c", "claude:d"])
     }
+
+    @Test func missingLoginRollsExpiredWindowsLikeExplicitFailures() {
+        let previous = AccountLimits(id: "codex:fixture", provider: .codex, meters: [
+            .percent("session", "Session", used: 100, resetsAt: now.addingTimeInterval(-60), period: 18_000),
+        ], updated: now.addingTimeInterval(-120))
+        var missing: [String: Date] = [:]
+        let cards = LimitsSources.update([previous], with: [], asked: [.codex], missingSince: &missing, now: now)
+        #expect(cards.first?.meters.first?.used == 0)
+        #expect(cards.first?.meters.first?.resetsAt == nil)
+    }
 }
