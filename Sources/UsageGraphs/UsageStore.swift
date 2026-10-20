@@ -152,7 +152,10 @@ final class UsageStore {
 
     private func scan(_ providers: Set<Provider>?, _ read: @escaping @Sendable (any UsageSource, (@Sendable (ScanProgress) -> Void)?) async -> UsageData) async {
         let chosen = sources.filter { (providers?.contains($0.provider) ?? true) && preferences.isShown($0.provider) }
-        if chosen.isEmpty { return }
+        if chosen.isEmpty {
+            await apply(rebuildingStats: true)
+            return
+        }
         activeScans += 1
         // Agents write to their history every few seconds while they run, and most of those reads add
         // nothing the stats show; only a read that changed some provider's history rebuilds them.
