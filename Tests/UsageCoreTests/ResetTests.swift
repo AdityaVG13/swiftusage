@@ -153,6 +153,53 @@ struct ResetTests {
         #expect(anthropic.sent[1].body == anthropic.sent[2].body)
     }
 
+    @Test func retryAfterRelaunchMustNotSpendAnotherReset() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-resets-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let storage = folder.appendingPathComponent("reset-requests.json")
+        let organization = "4f2c1f39-6a3e-4d6f-9a51-6f0f2b6f2f10"
+
+        let anthropic = Provider([nil, answer(200, #"{"result":"already_used"}"#)])
+        let firstClaude = ResetClaims(send: anthropic.send, storage: storage)
+        await firstClaude.offer(.anthropic(token: "secret-token", organization: organization, grant: "g1", renew: ""), for: "claude:a|o")
+        #expect(await firstClaude.use("claude:a|o") == .unsure("Anthropic didn't answer."))
+        let saved = (try? String(contentsOf: storage, encoding: .utf8)) ?? ""
+        #expect(!saved.contains("secret-token"))
+
+        let secondClaude = ResetClaims(send: anthropic.send, storage: storage)
+        await secondClaude.offer(.anthropic(token: "secret-token", organization: organization, grant: "g2", renew: ""), for: "claude:a|o")
+        #expect(await secondClaude.use("claude:a|o") == .usedEarlier)
+        #expect(anthropic.sent.count == 2)
+        #expect(anthropic.sent[0].body == anthropic.sent[1].body)
+
+        let list = answer(200, #"{"credits":[{"id":"a","status":"available","expires_at":"2099-01-01T00:00:00Z"}]}"#)
+        let chatGPT = Provider([list, nil, answer(200, #"{"code":"already_redeemed"}"#)])
+        let firstCodex = ResetClaims(send: chatGPT.send, storage: storage)
+        await firstCodex.offer(.chatGPT(token: "secret-token", accountID: nil, renew: ""), for: "codex:x")
+        #expect(await firstCodex.use("codex:x") == .unsure("ChatGPT didn't answer."))
+
+        let secondCodex = ResetClaims(send: chatGPT.send, storage: storage)
+        await secondCodex.offer(.chatGPT(token: "secret-token", accountID: nil, renew: ""), for: "codex:x")
+        #expect(await secondCodex.use("codex:x") == .usedEarlier)
+        #expect(chatGPT.sent.count == 3)
+        #expect(chatGPT.sent[1].body == chatGPT.sent[2].body)
+
+        struct StaleEntry: Codable {
+            var target: String
+            var request: String
+            var sent: Date
+        }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(["claude:a|o": StaleEntry(target: "old-grant", request: "old-request", sent: Date().addingTimeInterval(-2 * .day))])
+            .write(to: storage, options: .atomic)
+        let freshAnthropic = Provider([answer(200, #"{"result":"reset"}"#)])
+        let afterTwoDays = ResetClaims(send: freshAnthropic.send, storage: storage)
+        await afterTwoDays.offer(.anthropic(token: "secret-token", organization: organization, grant: "g3", renew: ""), for: "claude:a|o")
+        #expect(await afterTwoDays.use("claude:a|o") == .reset)
+        #expect(freshAnthropic.sent.first?.body?["request_id"] != "old-request")
+        #expect(freshAnthropic.sent.first?.body?["grant_id"] == "g3")
+    }
+
     @Test func codexStopsWhenNoResetIsLeft() async {
         let provider = Provider([answer(200, #"{"credits":[],"available_count":0}"#)])
         let claims = ResetClaims(send: provider.send)

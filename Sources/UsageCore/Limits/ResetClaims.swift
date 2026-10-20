@@ -20,7 +20,8 @@ public enum ResetOutcome: Sendable, Equatable {
 /// settles it, the ID is kept with the reset it named and sent again on the next try, so a request
 /// whose answer was lost comes back as already used instead of using a second reset.
 public actor ResetClaims {
-    public static let shared = ResetClaims()
+    public static let shared = ResetClaims(storage: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("dev.tasteskill.UsageGraphs/reset-requests.json"))
 
     enum Login: Sendable, Equatable {
         /// A ChatGPT login: Codex's, or Pi's.
@@ -37,18 +38,33 @@ public actor ResetClaims {
         var timeout: TimeInterval = 15
     }
 
+    private struct Pending: Codable {
+        var target: String
+        var request: String
+        var sent: Date
+    }
+
     static let network: @Sendable (Request) async -> HTTP.Response? = { request in
         guard let body = request.body else { return await HTTP.get(request.url, headers: request.headers, timeout: request.timeout) }
         return await HTTP.post(request.url, headers: request.headers, json: body, timeout: request.timeout)
     }
 
     private let send: @Sendable (Request) async -> HTTP.Response?
+    private let storage: URL?
     private var logins: [String: Login] = [:]
     /// By account: the reset the last request named and its ID, until an answer settles them.
-    private var unsettled: [String: (target: String, request: String)] = [:]
+    private var unsettled: [String: Pending] = [:] {
+        didSet { save() }
+    }
 
-    init(send: @escaping @Sendable (Request) async -> HTTP.Response? = ResetClaims.network) {
+    init(send: @escaping @Sendable (Request) async -> HTTP.Response? = ResetClaims.network, storage: URL? = nil) {
         self.send = send
+        self.storage = storage
+        if let storage, let data = try? Data(contentsOf: storage),
+           let loaded = try? JSONDecoder().decode([String: Pending].self, from: data) {
+            let now = Date()
+            unsettled = loaded.filter { now.timeIntervalSince($0.value.sent) <= .day }
+        }
     }
 
     /// Called with each reading: the login to use the account's resets with, or nil when it has none to use.
@@ -58,6 +74,9 @@ public actor ResetClaims {
 
     /// Uses one of the account's resets.
     public func use(_ account: String) async -> ResetOutcome {
+        if let pending = unsettled[account], Date().timeIntervalSince(pending.sent) > .day {
+            unsettled[account] = nil
+        }
         let repeating = unsettled[account] != nil
         switch logins[account] {
         case nil:
@@ -82,25 +101,25 @@ public actor ResetClaims {
                 }
                 target = credit.id
             }
-            let (credit, request) = pendingRequest(for: account, target: target)
+            let pending = pendingRequest(for: account, target: target)
             let response = await send(Request(url: CodexLimits.resetsURL + "/consume", headers: headers,
-                                              body: ["redeem_request_id": request, "credit_id": credit]))
-            return settle(account, request: request, CodexLimits.resetOutcome(response, renew: renew), repeating: repeating)
+                                              body: ["redeem_request_id": pending.request, "credit_id": pending.target]))
+            return settle(account, request: pending.request, CodexLimits.resetOutcome(response, renew: renew), repeating: repeating)
         case let .anthropic(token, organization, grant, renew):
             // It goes in the address.
             guard UUID(uuidString: organization) != nil else { return .notUsed("Anthropic sent an organization the app doesn't know.") }
-            let (target, request) = pendingRequest(for: account, target: grant)
-            let response = await send(AnthropicUsage.resetRequest(token: token, organization: organization, grant: target, request: request))
-            let outcome = settle(account, request: request, AnthropicUsage.resetOutcome(response, renew: renew), repeating: repeating)
+            let pending = pendingRequest(for: account, target: grant)
+            let response = await send(AnthropicUsage.resetRequest(token: token, organization: organization, grant: pending.target, request: pending.request))
+            let outcome = settle(account, request: pending.request, AnthropicUsage.resetOutcome(response, renew: renew), repeating: repeating)
             await AnthropicUsage.shared.forgetResetGrants(account)
             return outcome
         }
     }
 
     /// The request still waiting for an answer, or a new one for `target`.
-    private func pendingRequest(for account: String, target: String) -> (target: String, request: String) {
+    private func pendingRequest(for account: String, target: String) -> Pending {
         if let pending = unsettled[account] { return pending }
-        let fresh = (target: target, request: UUID().uuidString.lowercased())
+        let fresh = Pending(target: target, request: UUID().uuidString.lowercased(), sent: Date())
         unsettled[account] = fresh
         return fresh
     }
@@ -113,5 +132,11 @@ public actor ResetClaims {
         if settled, unsettled[account]?.request == request { unsettled[account] = nil }
         if repeating, !settled, case .notUsed(let why) = answer.outcome { return .unsure(why) }
         return answer.outcome
+    }
+
+    private func save() {
+        guard let storage else { return }
+        try? FileManager.default.createDirectory(at: storage.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(unsettled).write(to: storage, options: .atomic)
     }
 }
