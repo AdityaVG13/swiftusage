@@ -76,6 +76,16 @@ struct PricingTests {
         #expect(prices.price(for: "swe-2-high") == nil)
     }
 
+    @Test func reviewBracketedContextPricing() throws {
+        let named = try #require(PriceList.bundled.price(for: "grok-4.7-500k"))
+        let bracketed = try #require(PriceList.bundled.price(for: "grok-4.7[500k]"))
+        let fast = try #require(PriceList.bundled.price(for: "grok-4.7[500k]-fast"))
+        let namedFast = try #require(PriceList.bundled.price(for: "grok-4.7-500k-fast"))
+        #expect(bracketed == named)
+        #expect(fast == namedFast)
+        #expect(PriceList.bundled.price(for: "claude-opus-5-5[1m]") == PriceList.bundled.price(for: "claude-opus-5-5"))
+    }
+
     @Test func litellmListConverts() throws {
         let list: [String: Any] = [
             "claude-opus-5-5": ["litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 4e-06, "output_cost_per_token": 2e-05,

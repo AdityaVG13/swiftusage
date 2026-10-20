@@ -114,6 +114,15 @@ public struct PriceList: Sendable {
     /// What `model` costs at `speed`, or nil when no source prices it.
     public func price(for model: String, speed: Speed = .standard) -> ModelPrice? {
         var name = model.lowercased().trimmingCharacters(in: .whitespaces)
+        if let open = name.firstIndex(of: "["), let close = name[open...].firstIndex(of: "]") {
+            let prefix = name[..<open]
+            let annotation = name[name.index(after: open)..<close]
+            let suffix = name[name.index(after: close)...]
+            if !annotation.isEmpty, let priced = price(for: "\(prefix)-\(annotation)\(suffix)", speed: speed) {
+                return priced
+            }
+            return price(for: "\(prefix)\(suffix)", speed: speed)
+        }
         if let bracket = name.firstIndex(of: "[") { name = String(name[..<bracket]) }
         var speed = speed
         if name.hasSuffix("-fast") {
