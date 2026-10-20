@@ -162,6 +162,38 @@ struct LimitsTests {
         #expect(spent.meters.map(\.used) == [100, 50])
     }
 
+    @Test func devinReadsXDGDataHomeBeforeDefaultFolder() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-devin-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let xdg = home.appendingPathComponent("xdg")
+        try FileManager.default.createDirectory(at: xdg.appendingPathComponent("devin"), withIntermediateDirectories: true)
+        try "windsurf_api_key = \"xdg-key\"\n".write(to: xdg.appendingPathComponent("devin/credentials.toml"), atomically: true, encoding: .utf8)
+
+        let suite = "usagegraphs-devin-xdg-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let configured = EnvironmentFolders.seen("XDG_DATA_HOME", environment: ["XDG_DATA_HOME": xdg.path], defaults: defaults)
+        #expect(EnvironmentFolders.seen("XDG_DATA_HOME", environment: [:], defaults: defaults) == [xdg.path])
+
+        let sent = Mutex<[URLRequest]>([])
+        let body = Data(#"{"userStatus":{"planStatus":{"weeklyQuotaRemainingPercent":80}}}"#.utf8)
+        let cards = await HTTP.$transport.withValue({ request in
+            sent.withLock { $0.append(request) }
+            return HTTP.Response(status: 200, headers: [:], data: body)
+        }) {
+            await DevinLimits().fetch(home: home, configured: configured)
+        }
+        #expect(cards.first?.id == "devin:" + "xdg-key".sha256Prefix)
+        #expect(cards.first?.meters.first?.used == 20)
+        #expect(sent.withLock { $0.count } == 1)
+
+        let fallback = home.appendingPathComponent(".local/share/devin")
+        try FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
+        try "windsurf_api_key = \"default-key\"\n".write(to: fallback.appendingPathComponent("credentials.toml"), atomically: true, encoding: .utf8)
+        #expect(DevinLimits.credentials(home: home, configured: configured)?.key == "xdg-key")
+        #expect(DevinLimits.credentials(home: home, configured: [])?.key == "default-key")
+    }
+
     @Test func grokReadsItsWeeklyPool() {
         let config = object(#"{"currentPeriod":{"type":"USAGE_PERIOD_TYPE_WEEKLY","start":"2026-10-13T16:52:11.0+00:00","end":"2026-10-20T16:52:11.0+00:00"},"onDemandCap":{"val":2500}}"#)
         let limits = GrokLimits.limits(config, id: "grok:x", account: nil, plan: "SuperGrok Heavy")

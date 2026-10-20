@@ -8,7 +8,11 @@ public struct DevinLimits: LimitsSource {
     public init() {}
 
     public func fetch() async -> [AccountLimits] {
-        guard let (key, server) = Self.credentials() else { return [] }
+        await fetch(home: .home)
+    }
+
+    func fetch(home: URL = .home, configured: [String] = EnvironmentFolders.seen("XDG_DATA_HOME")) async -> [AccountLimits] {
+        guard let (key, server) = Self.credentials(home: home, configured: configured) else { return [] }
         let id = "devin:" + key.sha256Prefix
         let body: [String: Any] = ["metadata": [
             "apiKey": key, "ideName": "devin", "ideVersion": "1.108.2", "extensionName": "devin", "extensionVersion": "1.108.2", "locale": "en",
@@ -53,9 +57,11 @@ public struct DevinLimits: LimitsSource {
         return result
     }
 
-    private static func credentials() -> (key: String, server: String)? {
+    static func credentials(home: URL = .home, configured: [String] = EnvironmentFolders.seen("XDG_DATA_HOME")) -> (key: String, server: String)? {
         let defaultServer = "https://server.codeium.com"
-        if let toml = try? String(contentsOf: .home.appendingPathComponent(".local/share/devin/credentials.toml"), encoding: .utf8) {
+        let folders = configured.map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) } + [home.appendingPathComponent(".local/share")]
+        for folder in folders {
+            guard let toml = try? String(contentsOf: folder.appendingPathComponent("devin/credentials.toml"), encoding: .utf8) else { continue }
             var values: [String: String] = [:]
             for line in toml.split(separator: "\n") {
                 let parts = line.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -67,7 +73,7 @@ public struct DevinLimits: LimitsSource {
                 return (key, server ?? defaultServer)
             }
         }
-        let app = URL.home.appendingPathComponent("Library/Application Support/Devin/User/globalStorage/state.vscdb")
+        let app = home.appendingPathComponent("Library/Application Support/Devin/User/globalStorage/state.vscdb")
         guard let reader = SQLiteReader(path: app.path) else { return nil }
         var key: String?
         reader.rows("SELECT value FROM ItemTable WHERE key = 'windsurfAuthStatus' LIMIT 1") { row in
