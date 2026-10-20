@@ -107,6 +107,21 @@ struct IndexTests {
         #expect(stats.totalTokens == 660)
     }
 
+    @Test func advisorIterationsAddUsageOnTheirOwnModel() async throws {
+        let projects = try TempProjects()
+        let line = #"""
+        {"type":"assistant","timestamp":"2026-10-18T10:00:05Z","message":{"id":"msg_1","model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"iterations":[{"type":"message","model":null,"input_tokens":100,"output_tokens":10},{"type":"advisor_message","model":"claude-opus-5-5","input_tokens":1000,"output_tokens":100,"cache_read_input_tokens":200,"cache_creation_input_tokens":50}]}}}
+        """#
+        try projects.write("-Users-me-app/s1.jsonl", [line, line])
+
+        let data = await UsageIndex(projectsURL: projects.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.sessions == 1)
+        #expect(stats.messages == 1)
+        #expect(stats.totalTokens == 110 + 1350)
+        #expect(stats.models.map(\.name) == ["Opus 5.5", "Sonnet 5"])
+    }
+
     @Test func appendedLinesAreReadIncrementally() async throws {
         let projects = try TempProjects()
         let path = "-p/s.jsonl"
