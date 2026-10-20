@@ -364,4 +364,24 @@ extension ProviderTests {
         #expect(Array(database.messages.keys) == ["new"])
         #expect(database.messages["new"]?.tokens.input == 200)
     }
+
+    @Test func devinRewrittenMessageKeepsPartialUsage() throws {
+        let home = try TempProjects()
+        let path = home.root.appendingPathComponent("sessions.db").path
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        run("CREATE TABLE sessions (id TEXT, created_at INTEGER, hidden INTEGER, model TEXT)")
+        run("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, created_at INTEGER, chat_message TEXT)")
+        run("INSERT INTO sessions VALUES ('s', 1792317600, 0, 'gpt-5')")
+        for (i, output) in [0, 50].enumerated() {
+            let json = #"{"message_id":"a","role":"assistant","metadata":{"metrics":{"input_tokens":100,"output_tokens":\#(output)}}}"#
+            run("INSERT INTO message_nodes VALUES (\(i + 1), 's', 1792317601, '\(json)')")
+        }
+        var database = DevinSource.Database()
+        #expect(database.read(try #require(SQLiteReader(path: path))))
+        #expect(database.messages.count == 1)
+        #expect(database.messages["a"]?.tokens == TokenCounts(input: 100, output: 50))
+    }
 }

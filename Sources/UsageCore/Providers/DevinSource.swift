@@ -48,7 +48,7 @@ public actor DevinSource: UsageSource {
         var messages: [String: Message] = [:]
         for database in databases.values {
             sessions.merge(database.sessions) { kept, _ in kept }
-            messages.merge(database.messages) { kept, _ in kept }
+            messages.merge(database.messages) { kept, candidate in kept.tokens.total >= candidate.tokens.total ? kept : candidate }
         }
         var data = UsageData()
         data.transcriptCount = sessions.count
@@ -123,8 +123,6 @@ public actor DevinSource: UsageSource {
                 latest = max(latest, row.int(0))
                 guard let session = row.text(1), let role = row.text(4) else { return }
                 let id = row.text(3) ?? "\(session)#\(row.int(0))"
-                guard next.messages[id] == nil else { return }
-                guard let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2)) else { return }
                 let isAssistant = role == "assistant"
                 let tokens: TokenCounts
                 if isAssistant {
@@ -135,6 +133,14 @@ public actor DevinSource: UsageSource {
                 } else {
                     tokens = TokenCounts()
                 }
+                if let existing = next.messages[id] {
+                    if tokens.total > existing.tokens.total {
+                        next.messages[id]?.tokens = tokens
+                        next.messages[id]?.model = row.text(7) ?? existing.model
+                    }
+                    return
+                }
+                guard let created = row.text(6).flatMap(Timestamp.parse) ?? Timestamp.seconds(row.double(2)) else { return }
                 next.messages[id] = Message(session: session, created: created, counts: isAssistant || row.int(5) != 0,
                                             model: row.text(7), tokens: tokens)
             }) else { return false }
