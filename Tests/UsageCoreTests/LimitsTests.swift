@@ -658,7 +658,7 @@ struct LimitsTests {
             }
             return HTTP.Response(status: 200, headers: [:], data: Data(body.utf8))
         }) {
-            await CursorLimits().fetch(home: home)
+            await CursorLimits().fetch(home: home) { _ in .missing }
         }
         let card = try #require(cards.first)
         #expect(card.plan == "Enterprise")
@@ -667,6 +667,81 @@ struct LimitsTests {
         #expect(card.meters.first?.used == 37)
         #expect(card.meters.last?.used == 12)
         #expect(card.meters.last?.limit == 100)
+    }
+
+    @Test func cursorFindsCLIFileAndKeychainLoginsAfterIDE() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-cursor-cli-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        func jwt(sub: String) -> String {
+            let payload = Data(#"{"sub":"\#(sub)"}"#.utf8).base64EncodedString()
+                .replacingOccurrences(of: "=", with: "")
+            return "eyJhbGciOiJIUzI1NiJ9.\(payload).sig"
+        }
+
+        let cliToken = jwt(sub: "auth0|cli-user")
+        let authURL = home.appendingPathComponent(".cursor/auth.json")
+        try FileManager.default.createDirectory(at: authURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"accessToken":"\#(cliToken)","refreshToken":"cli-refresh"}"#.write(to: authURL, atomically: true, encoding: .utf8)
+
+        let sent = Mutex<[URLRequest]>([])
+        try await HTTP.$transport.withValue({ request in
+            sent.withLock { $0.append(request) }
+            let body: String = if request.url!.path == "/oauth/token" {
+                #"{"access_token":"\#(cliToken)"}"#
+            } else if request.url!.path.hasSuffix("GetPlanInfo") {
+                #"{"planInfo":{"planName":"Pro"}}"#
+            } else {
+                #"{"planUsage":{"totalPercentUsed":25}}"#
+            }
+            return HTTP.Response(status: 200, headers: [:], data: Data(body.utf8))
+        }) {
+            // CLI auth.json login is used without touching the keychain.
+            let keychainAsked = Mutex(false)
+            let fromFile = await CursorLimits().fetch(home: home) { _ in
+                keychainAsked.withLock { $0 = true }
+                return .needsPermission
+            }
+            #expect(!keychainAsked.withLock { $0 })
+            #expect(fromFile.count == 1)
+            #expect(fromFile.first?.id == "cursor:auth0|cli-user")
+            #expect(fromFile.first?.meters.first?.used == 25)
+
+            // Without auth.json, the keychain items are read, and needs-permission gives the Allow Access card.
+            try FileManager.default.removeItem(at: authURL)
+            let fromKeychain = await CursorLimits().fetch(home: home) { item in
+                item.service == "cursor-access-token" ? .password(cliToken) : .missing
+            }
+            #expect(fromKeychain.count == 1)
+            #expect(fromKeychain.first?.id == "cursor:auth0|cli-user")
+            #expect(fromKeychain.first?.meters.first?.used == 25)
+
+            let fromRefresh = await CursorLimits().fetch(home: home) { item in
+                item.service == "cursor-refresh-token" ? .password("cli-refresh") : .missing
+            }
+            #expect(fromRefresh.count == 1)
+            #expect(fromRefresh.first?.id == "cursor:auth0|cli-user")
+            #expect(fromRefresh.first?.meters.first?.used == 25)
+
+            let waiting = await CursorLimits().fetch(home: home) { item in
+                item.service == "cursor-access-token" ? .needsPermission : .missing
+            }
+            #expect(waiting.count == 1)
+            #expect(waiting.first?.action == .allowKeychain)
+
+            // When the IDE has a login for the same account, the IDE login wins.
+            try #"{"accessToken":"\#(cliToken)","refreshToken":"cli-refresh"}"#.write(to: authURL, atomically: true, encoding: .utf8)
+            let dbURL = home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+            try FileManager.default.createDirectory(at: dbURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            var db: OpaquePointer?
+            #expect(sqlite3_open(dbURL.path, &db) == SQLITE_OK)
+            defer { sqlite3_close(db) }
+            #expect(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', '\(cliToken)'), ('cursorAuth/cachedEmail', 'ide@example.com');", nil, nil, nil) == SQLITE_OK)
+            sent.withLock { $0.removeAll() }
+            let deduplicated = await CursorLimits().fetch(home: home) { _ in .missing }
+            #expect(deduplicated.count == 1)
+            #expect(deduplicated.first?.account == "ide@example.com")
+            #expect(sent.withLock { $0.count } == 2)
+        }
     }
 
     @Test func codexFindsEveryHome() throws {

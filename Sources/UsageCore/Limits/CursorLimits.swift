@@ -5,44 +5,131 @@ import Foundation
 public struct CursorLimits: LimitsSource {
     public let provider = Provider.cursor
     private static let api = "https://api2.cursor.sh/aiserver.v1.DashboardService/"
+    private static let clientID = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB"
 
     public init() {}
+
+    struct Login: Equatable {
+        enum Source: Equatable {
+            case ide, cli
+        }
+
+        var source: Source
+        var access: String?
+        var refresh: String?
+        var email: String?
+        var membership: String?
+
+        var subject: String? {
+            [access, refresh].compactMap(CursorLimits.subject).first
+        }
+
+        var id: String { "cursor:" + (subject ?? "default") }
+    }
 
     public func fetch() async -> [AccountLimits] {
         await fetch(home: .home)
     }
 
-    func fetch(home: URL = .home) async -> [AccountLimits] {
+    func fetch(home: URL = .home, keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password) async -> [AccountLimits] {
+        let (logins, waitingOn) = Self.logins(home: home, keychain: keychain)
+        var results = LimitsSources.merged(await LimitsSources.readings(of: logins, id: \.id) { login in
+            await limits(for: login)
+        })
+        if let item = waitingOn {
+            let id = "cursor:keychain"
+            Keychain.wait(id, on: item)
+            results.append(AccountLimits(id: id, provider: provider,
+                                         problem: "To see these limits, allow access to Cursor's login and choose Always Allow.",
+                                         action: .allowKeychain))
+        }
+        return results
+    }
+
+    static func logins(home: URL = .home, keychain: (Keychain.Item) -> Keychain.Reading = Keychain.password) -> (logins: [Login], waitingOn: Keychain.Item?) {
+        var logins: [Login] = []
         let state = home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
-        guard let reader = SQLiteReader(path: state.path) else { return [] }
-        var values: [String: String] = [:]
-        reader.rows("SELECT key, value FROM ItemTable WHERE key IN ('cursorAuth/accessToken', 'cursorAuth/cachedEmail', 'cursorAuth/stripeMembershipType')") { row in
-            if let key = row.text(0), let value = row.text(1) { values[key] = value }
-        }
-        guard let token = values["cursorAuth/accessToken"], !token.isEmpty else { return [] }
-        let email = values["cursorAuth/cachedEmail"]
-        let id = "cursor:" + ((JWT.claims(token)?["sub"] as? String) ?? "default")
-        if let expiry = JWT.expiry(token), expiry < Date() {
-            return [.failed(id, provider, account: email, "Login expired. Open Cursor to renew it.")]
+        if let reader = SQLiteReader(path: state.path) {
+            var values: [String: String] = [:]
+            reader.rows("SELECT key, value FROM ItemTable WHERE key IN ('cursorAuth/accessToken', 'cursorAuth/refreshToken', 'cursorAuth/cachedEmail', 'cursorAuth/stripeMembershipType')") { row in
+                if let key = row.text(0), let value = Self.trimmed(row.text(1)) { values[key] = value }
+            }
+            if values["cursorAuth/accessToken"] != nil || values["cursorAuth/refreshToken"] != nil {
+                logins.append(Login(source: .ide, access: values["cursorAuth/accessToken"], refresh: values["cursorAuth/refreshToken"],
+                                    email: values["cursorAuth/cachedEmail"], membership: values["cursorAuth/stripeMembershipType"]))
+            }
         }
 
-        let headers = ["Authorization": "Bearer " + token, "Connect-Protocol-Version": "1"]
-        async let planResponse = HTTP.post(Self.api + "GetPlanInfo", headers: headers, json: [String: Any](), timeout: 20)
-        let usageResponse = await HTTP.post(Self.api + "GetCurrentPeriodUsage", headers: headers, json: [String: Any](), timeout: 20)
-        let planInfo = await planResponse?.json?["planInfo"] as? [String: Any]
-        let plan = (planInfo?["planName"] as? String) ?? values["cursorAuth/stripeMembershipType"]?.replacingOccurrences(of: "unified_", with: "").titleCased
+        var waitingOn: Keychain.Item?
+        if let auth = JSONValue.object(file: home.appendingPathComponent(".cursor/auth.json")) {
+            let access = Self.trimmed((auth["accessToken"] ?? auth["access_token"]) as? String)
+            let refresh = Self.trimmed((auth["refreshToken"] ?? auth["refresh_token"]) as? String)
+            let email = Self.trimmed(auth["email"] as? String)
+            if access != nil || refresh != nil {
+                logins.append(Login(source: .cli, access: access, refresh: refresh, email: email))
+            }
+        }
+        if !logins.contains(where: { $0.source == .cli }) {
+            let accessItem = Keychain.Item(service: "cursor-access-token")
+            let refreshItem = Keychain.Item(service: "cursor-refresh-token")
+            var access: String?
+            var refresh: String?
+            switch keychain(accessItem) {
+            case .password(let raw): access = Self.trimmed(raw)
+            case .needsPermission: waitingOn = accessItem
+            case .missing: break
+            }
+            if waitingOn == nil {
+                switch keychain(refreshItem) {
+                case .password(let raw): refresh = Self.trimmed(raw)
+                case .needsPermission: if access == nil { waitingOn = refreshItem }
+                case .missing: break
+                }
+            }
+            if access != nil || refresh != nil {
+                logins.append(Login(source: .cli, access: access, refresh: refresh))
+            }
+        }
+        return (logins, waitingOn)
+    }
 
-        guard let usageResponse else { return [.failed(id, provider, account: email, plan: plan, "Couldn't reach Cursor.")] }
+    private func limits(for login: Login) async -> AccountLimits {
+        let email = login.email
+        let renewHint = login.source == .ide ? "Open Cursor to renew it." : "Run `agent login` to renew it."
+        var token = login.access
+        let needsRefresh = token == nil || (token.flatMap(JWT.expiry).map { $0 <= HTTP.now().addingTimeInterval(5 * 60) } ?? false)
+        var renewed = false
+        if needsRefresh, let refresh = login.refresh {
+            renewed = true
+            if let refreshed = await Self.renew(refresh) { token = refreshed }
+        }
+        let id = "cursor:" + (Self.subject(token) ?? login.subject ?? "default")
+        guard var token else {
+            return .failed(id, provider, account: email, "Login expired. \(renewHint)")
+        }
+        if let expiry = JWT.expiry(token), expiry < HTTP.now() {
+            return .failed(id, provider, account: email, "Login expired. \(renewHint)")
+        }
+
+        var (planResponse, usageResponse) = await Self.query(token: token)
+        if usageResponse?.status == 401, !renewed, let refresh = login.refresh, let refreshed = await Self.renew(refresh) {
+            token = refreshed
+            (planResponse, usageResponse) = await Self.query(token: token)
+        }
+        let planInfo = planResponse?.json?["planInfo"] as? [String: Any]
+        let plan = (planInfo?["planName"] as? String) ?? login.membership?.replacingOccurrences(of: "unified_", with: "").titleCased
+
+        guard let usageResponse else { return .failed(id, provider, account: email, plan: plan, "Couldn't reach Cursor.") }
         switch usageResponse.status {
         case 200..<300: break
-        case 401, 403: return [.failed(id, provider, account: email, plan: plan, "Login expired. Open Cursor to renew it.")]
-        default: return [.failed(id, provider, account: email, plan: plan, "Cursor's usage API answered HTTP \(usageResponse.status).")]
+        case 401, 403: return .failed(id, provider, account: email, plan: plan, "Login expired. \(renewHint)")
+        default: return .failed(id, provider, account: email, plan: plan, "Cursor's usage API answered HTTP \(usageResponse.status).")
         }
-        guard let usage = usageResponse.json else { return [.failed(id, provider, account: email, plan: plan, "Cursor's usage API sent something unexpected.")] }
+        guard let usage = usageResponse.json else { return .failed(id, provider, account: email, plan: plan, "Cursor's usage API sent something unexpected.") }
         var result = Self.limits(usage, planInfo: planInfo, id: id, account: email, plan: plan)
         if !result.meters.contains(where: { $0.id == "total" || $0.id == "auto" }) {
             // Team and enterprise plans report through the dashboard's own endpoints instead.
-            let user = (JWT.claims(token)?["sub"] as? String).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
+            let user = Self.subject(token).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
             let cookie = ["Cookie": "WorkosCursorSessionToken=\(user)%3A%3A\(token)", "Accept": "application/json"]
             async let summary = HTTP.get("https://cursor.com/api/usage-summary", headers: cookie)
             let requests = await HTTP.get("https://cursor.com/api/usage?user=" + (user.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? user), headers: cookie)
@@ -59,7 +146,33 @@ public struct CursorLimits: LimitsSource {
                 result.problem = nil
             }
         }
-        return [result]
+        return result
+    }
+
+    private static func query(token: String) async -> (plan: HTTP.Response?, usage: HTTP.Response?) {
+        let headers = ["Authorization": "Bearer " + token, "Connect-Protocol-Version": "1"]
+        async let planResponse = HTTP.post(api + "GetPlanInfo", headers: headers, json: [String: Any](), timeout: 20)
+        let usageResponse = await HTTP.post(api + "GetCurrentPeriodUsage", headers: headers, json: [String: Any](), timeout: 20)
+        return (await planResponse, usageResponse)
+    }
+
+    private static func renew(_ refresh: String) async -> String? {
+        let body: [String: Any] = ["grant_type": "refresh_token", "client_id": clientID, "refresh_token": refresh]
+        guard let response = await HTTP.post("https://api2.cursor.sh/oauth/token", json: body),
+              response.ok, response.json?["shouldLogout"] as? Bool != true,
+              let token = trimmed(response.json?["access_token"] as? String)
+        else { return nil }
+        return token
+    }
+
+    private static func subject(_ token: String?) -> String? {
+        guard let token else { return nil }
+        return trimmed(JWT.claims(token)?["sub"] as? String)
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else { return nil }
+        return trimmed
     }
 
     /// The dashboard's view for team and enterprise plans: requests used of the month's allowance, the
