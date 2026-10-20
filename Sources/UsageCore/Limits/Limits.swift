@@ -70,8 +70,11 @@ public struct LimitResets: Codable, Sendable, Equatable {
 
 /// Something the person can do about an account's `problem` from its card.
 public enum LimitAction: String, Codable, Sendable {
-    /// Let the app read the login Claude Desktop keeps, which macOS asks about once.
+    /// Let the app read the login Claude Desktop keeps, which macOS asks about until it's always allowed.
     case allowClaudeDesktop
+    /// Let a coding agent's login be read from the keychain, which macOS asks about while the keychain is
+    /// locked or the item doesn't trust the reader yet.
+    case allowKeychain
 }
 
 /// One signed-in account's plan and limits, as its provider last reported them.

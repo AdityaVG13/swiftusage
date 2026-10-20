@@ -1,6 +1,5 @@
 import CommonCrypto
 import Foundation
-import LocalAuthentication
 import Security
 
 /// The login Claude Desktop keeps, for accounts no Claude Code folder is signed in to: an access token per
@@ -8,13 +7,14 @@ import Security
 /// with a key in the keychain item "Claude Safe Storage". Only the access token is read; Desktop renews
 /// it itself.
 ///
-/// The keychain item belongs to Claude Desktop, so macOS asks once before another app can read it. That
-/// only happens when the person asks for it from the account's card; every other read is silent and
-/// says so when it isn't allowed yet.
+/// The keychain item belongs to Claude Desktop, so macOS asks before another app can read it, until the
+/// person chooses Always Allow. That only happens when they ask for it from the account's card; every other
+/// read first checks the item's access list and says so when it isn't allowed yet.
 public enum ClaudeDesktop {
     static var folder: URL { .home.appendingPathComponent("Library/Application Support/Claude") }
     /// Claude Desktop's own client, whose tokens can read limits.
     private static let desktopClient = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private static let storageItem = Keychain.Item(service: "Claude Safe Storage", account: "Claude Key")
 
     enum StorageKey: Equatable {
         case key(String)
@@ -38,18 +38,16 @@ public enum ClaudeDesktop {
     }
 
     static func storageKey(asking: Bool) -> StorageKey {
-        var query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Claude Safe Storage",
-            kSecAttrAccount as String: "Claude Key",
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
+        // Asking macOS not to show its prompt doesn't stop it, so a read that would ask doesn't happen.
         if !asking {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
+            switch Keychain.access(storageItem, by: .app) {
+            case .allowed: break
+            case .missing: return .missing
+            case .needsPermission: return .needsPermission
+            }
         }
+        var query = storageItem.query
+        query[kSecReturnData as String] = true
         var item: CFTypeRef?
         switch SecItemCopyMatching(query as CFDictionary, &item) {
         case errSecSuccess:
@@ -58,7 +56,7 @@ public enum ClaudeDesktop {
         case errSecItemNotFound:
             return .missing
         default:
-            // Not allowed without asking, or the person declined.
+            // The person declined, or the keychain couldn't be read.
             return .needsPermission
         }
     }
@@ -75,7 +73,7 @@ public enum ClaudeDesktop {
             return []
         case .needsPermission:
             return [AccountLimits(id: waiting, provider: .claude, account: "Claude Desktop",
-                                  problem: "Claude Desktop is signed in. Allow access to its login to see its limits.", action: .allowClaudeDesktop)]
+                                  problem: "To see these limits, allow access to Claude Desktop's login and choose Always Allow.", action: .allowClaudeDesktop)]
         case .key(let found):
             key = found
         }

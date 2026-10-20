@@ -71,7 +71,7 @@ struct LimitsTests {
             "Claude Code-credentials": #"{"claudeAiOauth":{"accessToken":"default","expiresAt":\#(future),"scopes":["user:inference","user:profile"],"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"}}"#,
             personal: #"{"claudeAiOauth":{"accessToken":"personal","expiresAt":\#(future),"subscriptionType":"max"}}"#,
         ]
-        let logins = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { service, _ in keychain[service] }
+        let logins = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { item in keychain[item.service].map(Keychain.Reading.password) ?? .missing }
         #expect(logins.map(\.token) == ["default", "copy", "personal"])
         #expect(logins.map(\.id) == ["claude:a1|o1", "claude:a2|o2", "claude:a2|o2"])
         #expect(logins.first?.account == "Tasteskill")
@@ -79,7 +79,7 @@ struct LimitsTests {
         #expect(logins.last?.account == "Personal")
 
         // Started from a shell that set `CLAUDE_CONFIG_DIR`, the plain default login still shows.
-        let custom = ClaudeLimits.logins(home: home, environment: ["USER": "tester", "CLAUDE_CONFIG_DIR": home.appendingPathComponent(".claude_personal").path]) { service, _ in keychain[service] }
+        let custom = ClaudeLimits.logins(home: home, environment: ["USER": "tester", "CLAUDE_CONFIG_DIR": home.appendingPathComponent(".claude_personal").path]) { item in keychain[item.service].map(Keychain.Reading.password) ?? .missing }
         #expect(custom.map(\.token) == ["personal", "default", "copy"])
         #expect(custom.map(\.isDefault) == [true, false, false])
 
@@ -88,9 +88,21 @@ struct LimitsTests {
         try write("work/claude config/.claude.json", #"{"oauthAccount":{"accountUuid":"A4","organizationUuid":"O4","organizationName":"Work"}}"#)
         var withWork = keychain
         withWork["Claude Code-credentials-" + elsewhere.path.sha256Prefix] = #"{"claudeAiOauth":{"accessToken":"work","expiresAt":\#(future)}}"#
-        let remembered = ClaudeLimits.logins(home: home, environment: ["USER": "tester"], remembered: [elsewhere.path]) { service, _ in withWork[service] }
+        let remembered = ClaudeLimits.logins(home: home, environment: ["USER": "tester"], remembered: [elsewhere.path]) { item in withWork[item.service].map(Keychain.Reading.password) ?? .missing }
         #expect(remembered.map(\.token) == ["default", "work", "copy", "personal"])
         #expect(remembered.first?.isDefault == true)
+
+        // A keychain item macOS would ask about isn't read: its folder waits on it, and the items after it
+        // aren't tried. A folder whose login is also in a file uses the file.
+        var asked: [Keychain.Item] = []
+        let waiting = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { item in
+            asked.append(item)
+            return item.service == "Claude Code-credentials" || item.service == personal ? .needsPermission : .missing
+        }
+        #expect(waiting.map(\.token) == [nil, "copy", nil])
+        #expect(waiting.map(\.waitingOn) == [Keychain.Item(service: "Claude Code-credentials", account: "tester"), nil,
+                                            Keychain.Item(service: personal, account: "tester")])
+        #expect(!asked.contains(Keychain.Item(service: "Claude Code-credentials", account: nil)))
     }
 
     @Test func codexNamesWindowsByLength() {
@@ -211,10 +223,14 @@ struct LimitsTests {
         try #"{"auth_method":"consumer","token":{"access_token":"cli","refresh_token":"1//cli","expiry":"2026-08-15T14:39:42.77425+02:00","token_type":"Bearer"}}"#
             .write(to: home.appendingPathComponent(".gemini/jetski-standalone-oauth-token"), atomically: true, encoding: .utf8)
         let app = "go-keyring-base64:" + Data(#"{"token":{"access_token":"app","refresh_token":"1//app"}}"#.utf8).base64EncodedString()
-        let logins = AntigravityLimits.logins(home: home) { service, account in service == "gemini" && account == "antigravity" ? app : nil }
+        let logins = AntigravityLimits.logins(home: home) { item in item == Keychain.Item(service: "gemini", account: "antigravity") ? .password(app) : .missing }.logins
         #expect(logins.map(\.refresh) == ["1//app", "1//cli"])
         #expect(logins.last?.access == "cli")
-        #expect(AntigravityLimits.logins(home: home.appendingPathComponent("nowhere")) { _, _ in nil }.isEmpty)
+        #expect(AntigravityLimits.logins(home: home.appendingPathComponent("nowhere")) { _ in .missing }.logins.isEmpty)
+        // An item macOS would ask about is left for the person to allow.
+        let waiting = AntigravityLimits.logins(home: home.appendingPathComponent("nowhere")) { _ in .needsPermission }
+        #expect(waiting.logins.isEmpty)
+        #expect(waiting.waitingOn == Keychain.Item(service: "gemini", account: "antigravity"))
     }
 
     @Test func antigravityPoolsItsQuotas() {

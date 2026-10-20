@@ -95,7 +95,7 @@ private struct AccountCard: View {
                         .lineLimit(2)
                     if let action = account.action {
                         Spacer(minLength: 0)
-                        Button(action.title) { Task { await limits.perform(action) } }
+                        Button(action.title) { Task { await limits.perform(action, for: account) } }
                             .controlSize(.small)
                             .fixedSize()
                     }
@@ -396,7 +396,7 @@ enum LimitText {
 extension LimitAction {
     var title: String {
         switch self {
-        case .allowClaudeDesktop: "Allow Access…"
+        case .allowClaudeDesktop, .allowKeychain: "Allow Access…"
         }
     }
 }

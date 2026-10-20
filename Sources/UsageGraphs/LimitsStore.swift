@@ -76,11 +76,14 @@ final class LimitsStore {
     }
 
     /// Does what an account's card offers, then reads the limits again.
-    func perform(_ action: LimitAction) async {
+    func perform(_ action: LimitAction, for account: AccountLimits) async {
+        // Each shows macOS's keychain prompt and waits for the answer, so it runs off the main thread.
         switch action {
         case .allowClaudeDesktop:
-            // Shows macOS's keychain prompt and waits for the answer, so it runs off the main thread.
             _ = await Task.detached { ClaudeDesktop.requestAccess() }.value
+        case .allowKeychain:
+            let id = account.id
+            _ = await Task.detached { Keychain.requestAccess(for: id) }.value
         }
         await refresh(force: true)
     }

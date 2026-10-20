@@ -18,7 +18,9 @@ public struct ClaudeLimits: LimitsSource {
         var isDefault: Bool
         var accountID: String
         var account: String?
-        var token: String
+        /// Nil while the keychain item it's in needs the person's permission: `waitingOn`.
+        var token: String?
+        var waitingOn: Keychain.Item?
         var expires: Date?
         var scopes: [String]?
         var subscription: String?
@@ -41,6 +43,11 @@ public struct ClaudeLimits: LimitsSource {
     }
 
     private static func limits(for login: Login) async -> AccountLimits {
+        guard let token = login.token else {
+            if let item = login.waitingOn { Keychain.wait(login.id, on: item) }
+            return AccountLimits(id: login.id, provider: .claude, account: login.account,
+                                 problem: "To see these limits, allow access to Claude Code's login and choose Always Allow.", action: .allowKeychain)
+        }
         let renew = login.isDefault ? "Run `claude` to renew it." : "Run Claude Code with this account to renew it."
         let plan = plan(login.subscription, login.tier)
         if let expires = login.expires, expires < Date() {
@@ -49,7 +56,7 @@ public struct ClaudeLimits: LimitsSource {
         if let scopes = login.scopes, !scopes.isEmpty, !scopes.contains("user:profile") {
             return .failed(login.id, .claude, account: login.account, "This login can't read limits. Sign in again with `claude`.")
         }
-        return await AnthropicUsage.shared.limits(id: login.id, provider: .claude, account: login.account, token: login.token, renew: renew, plan: plan)
+        return await AnthropicUsage.shared.limits(id: login.id, provider: .claude, account: login.account, token: token, renew: renew, plan: plan)
     }
 
     // MARK: - Reading the response
@@ -119,7 +126,7 @@ public struct ClaudeLimits: LimitsSource {
 
     /// `remembered` are folders `CLAUDE_CONFIG_DIR` named before, as written, read even when it isn't set now.
     static func logins(home: URL = .home, environment: [String: String] = ProcessInfo.processInfo.environment, remembered: [String] = [],
-                       keychain: (_ service: String, _ account: String?) -> String? = Keychain.password) -> [Login] {
+                       keychain: (Keychain.Item) -> Keychain.Reading = Keychain.password) -> [Login] {
         var folders: [(url: URL, identity: URL, isDefault: Bool, service: [String])] = []
         let user = environment["USER"] ?? NSUserName()
         let custom = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 }
@@ -149,23 +156,38 @@ public struct ClaudeLimits: LimitsSource {
         return folders.compactMap { folder in
             guard let account = JSONValue.object(file: folder.identity)?["oauthAccount"] as? [String: Any],
                   let accountID = account["accountUuid"] as? String else { return nil }
-            func oauth(_ reading: String?) -> [String: Any]? {
-                JSONValue.object(reading.map { Data($0.utf8) })?["claudeAiOauth"] as? [String: Any]
+            func oauth(_ reading: String) -> [String: Any]? {
+                JSONValue.object(Data(reading.utf8))?["claudeAiOauth"] as? [String: Any]
             }
             // Claude Code saves its login under the user's name; an item without one can hold other logins.
             var credentials: [String: Any]?
-            for service in folder.service where credentials == nil {
-                credentials = oauth(keychain(service, user)) ?? oauth(keychain(service, nil))
+            var waitingOn: Keychain.Item?
+            search: for service in folder.service {
+                for name in [user, nil] {
+                    let item = Keychain.Item(service: service, account: name)
+                    switch keychain(item) {
+                    case .password(let reading):
+                        credentials = oauth(reading)
+                        if credentials != nil { break search }
+                    case .needsPermission:
+                        waitingOn = item
+                        break search
+                    case .missing:
+                        continue
+                    }
+                }
             }
             credentials = credentials ?? JSONValue.object(file: folder.url.appendingPathComponent(".credentials.json"))?["claudeAiOauth"] as? [String: Any]
-            guard let credentials, let token = credentials["accessToken"] as? String, !token.isEmpty else { return nil }
+            let token = (credentials?["accessToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            guard token != nil || waitingOn != nil else { return nil }
 
             let organization = account["organizationUuid"] as? String
             return Login(folder: folder.url, isDefault: folder.isDefault,
                          accountID: [accountID, organization].compactMap { $0?.lowercased() }.joined(separator: "|"),
                          account: label(organization: account["organizationName"] as? String, email: account["emailAddress"] as? String),
-                         token: token, expires: JSONValue.date(credentials["expiresAt"]), scopes: credentials["scopes"] as? [String],
-                         subscription: credentials["subscriptionType"] as? String, tier: credentials["rateLimitTier"] as? String)
+                         token: token, waitingOn: token == nil ? waitingOn : nil, expires: JSONValue.date(credentials?["expiresAt"]),
+                         scopes: credentials?["scopes"] as? [String],
+                         subscription: credentials?["subscriptionType"] as? String, tier: credentials?["rateLimitTier"] as? String)
         }
     }
 

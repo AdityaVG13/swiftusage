@@ -65,58 +65,6 @@ enum HTTP {
     }
 }
 
-/// Reads the logins coding agents keep in the login keychain.
-enum Keychain {
-    /// The password of a generic keychain item, read with `/usr/bin/security`. Claude Code and Antigravity
-    /// save their logins with that same tool, so reading them this way doesn't ask for permission.
-    static func password(service: String, account: String? = nil) -> String? {
-        var arguments = ["find-generic-password", "-s", service, "-w"]
-        if let account { arguments.insert(contentsOf: ["-a", account], at: 1) }
-        guard let output = run("/usr/bin/security", arguments) else { return nil }
-        let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
-        return value.isEmpty ? nil : value
-    }
-
-    /// Stdout of a command that succeeded within `timeout` seconds, or nil. A locked keychain or a
-    /// permission prompt would otherwise hold every later refresh.
-    static func run(_ path: String, _ arguments: [String], timeout: TimeInterval = 5) -> String? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = arguments
-        process.environment = [:]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        // Read as it arrives, so a large answer can't fill the pipe and stall the command.
-        let buffer = OutputBuffer()
-        output.fileHandleForReading.readabilityHandler = { buffer.append($0.availableData) }
-        let ended = finished.wait(timeout: .now() + timeout) == .success
-        output.fileHandleForReading.readabilityHandler = nil
-        guard ended else {
-            process.terminate()
-            return nil
-        }
-        buffer.append(output.fileHandleForReading.readDataToEndOfFile())
-        guard process.terminationStatus == 0 else { return nil }
-        return String(data: buffer.data, encoding: .utf8)
-    }
-
-    private final class OutputBuffer: @unchecked Sendable {
-        private let lock = NSLock()
-        private var bytes = Data()
-
-        func append(_ chunk: Data) { lock.withLock { bytes.append(chunk) } }
-        var data: Data { lock.withLock { bytes } }
-    }
-}
-
 /// Config folders a tool was pointed to through the environment, such as `CLAUDE_CONFIG_DIR`. The app only
 /// sees one when it's opened from a shell that sets it, so each is remembered: a login found there once is
 /// still read after the app is opened from Finder. Folders that are gone are forgotten.

@@ -48,9 +48,16 @@ public actor AntigravityLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
+        let (logins, waitingOn) = Self.logins()
+        if logins.isEmpty, let item = waitingOn {
+            let id = "antigravity:keychain"
+            Keychain.wait(id, on: item)
+            return [AccountLimits(id: id, provider: provider, problem: "To see these limits, allow access to Antigravity's login and choose Always Allow.",
+                                  action: .allowKeychain)]
+        }
         var results: [AccountLimits] = []
         var seen: Set<String> = []
-        for login in Self.logins() {
+        for login in logins {
             // Renewing names the account, which tells one person's two logins from two people's.
             let session = await session(for: login)
             let id = "antigravity:" + (session.email?.lowercased() ?? (login.refresh ?? login.access ?? "").sha256Prefix)
@@ -60,15 +67,25 @@ public actor AntigravityLimits: LimitsSource {
         return results
     }
 
-    /// Every login on this Mac: the app's keychain item, `agy`'s, then `agy`'s file.
-    static func logins(home: URL = .home, keychain: (_ service: String, _ account: String?) -> String? = Keychain.password) -> [Login] {
+    /// Every login on this Mac: the app's keychain item, `agy`'s, then `agy`'s file. With the first keychain
+    /// item that needs the person's permission.
+    static func logins(home: URL = .home, keychain: (Keychain.Item) -> Keychain.Reading = Keychain.password) -> (logins: [Login], waitingOn: Keychain.Item?) {
         var logins: [Login] = []
+        var waitingOn: Keychain.Item?
         for account in ["antigravity", "antigravity-cli"] {
-            if let raw = keychain("gemini", account), let login = login(raw), !logins.contains(login) { logins.append(login) }
+            let item = Keychain.Item(service: "gemini", account: account)
+            switch keychain(item) {
+            case .password(let raw):
+                if let login = login(raw), !logins.contains(login) { logins.append(login) }
+            case .needsPermission:
+                waitingOn = waitingOn ?? item
+            case .missing:
+                break
+            }
         }
         let file = home.appendingPathComponent(".gemini/jetski-standalone-oauth-token")
         if let raw = try? String(contentsOf: file, encoding: .utf8), let login = login(raw), !logins.contains(login) { logins.append(login) }
-        return logins
+        return (logins, waitingOn)
     }
 
     /// A renewed token when the login can renew, kept until it nears expiry; else the login's own while it lasts.
