@@ -684,6 +684,53 @@ struct LimitsTests {
         #expect(CodexLimits.homes(home: home, configured: [named.path]).first?.path == named.path)
     }
 
+    @Test func codexReadsKeyringLoginsAndPrefersAuthFile() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-codex-keyring-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let codexHome = home.appendingPathComponent(".codex")
+        try FileManager.default.createDirectory(at: codexHome, withIntermediateDirectories: true)
+        try "cli_auth_credentials_store = \"keyring\"\n".write(to: codexHome.appendingPathComponent("config.toml"), atomically: true, encoding: .utf8)
+
+        #expect(CodexLimits.homes(home: home, configured: []).map(\.lastPathComponent) == [".codex"])
+        let expectedItem = CodexLimits.keychainItem(for: codexHome)
+        #expect(expectedItem.service == "Codex Auth")
+        #expect(expectedItem.account?.hasPrefix("cli|") == true)
+        #expect(expectedItem.account?.count == 20)
+
+        let body = Data(#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":18000}}}"#.utf8)
+        let sent = Mutex<[URLRequest]>([])
+        try await HTTP.$transport.withValue({ request in
+            sent.withLock { $0.append(request) }
+            return HTTP.Response(status: 200, headers: [:], data: body)
+        }) {
+            let keyringJSON = #"{"tokens":{"access_token":"keyring-token","account_id":"acct-keyring"}}"#
+            let cards = await CodexLimits().fetch(home: home, configured: []) { item in
+                item == expectedItem ? .password(keyringJSON) : .missing
+            }
+            #expect(cards.count == 1)
+            #expect(cards.first?.id == "codex:acct-keyring")
+            #expect(cards.first?.meters.first?.used == 12)
+            #expect(sent.withLock { $0.first?.value(forHTTPHeaderField: "Authorization") } == "Bearer keyring-token")
+
+            let waiting = await CodexLimits().fetch(home: home, configured: []) { item in
+                item == expectedItem ? .needsPermission : .missing
+            }
+            #expect(waiting.count == 1)
+            #expect(waiting.first?.action == .allowKeychain)
+            #expect(waiting.first?.problem == "To see these limits, allow access to Codex's login and choose Always Allow.")
+
+            // When both auth.json and keyring exist, auth.json wins without asking the keychain.
+            try #"{"tokens":{"access_token":"file-token","account_id":"acct-file"}}"#
+                .write(to: codexHome.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+            sent.withLock { $0.removeAll() }
+            let fileWins = await CodexLimits().fetch(home: home, configured: []) { _ in .needsPermission }
+            #expect(fileWins.count == 1)
+            #expect(fileWins.first?.id == "codex:acct-file")
+            #expect(fileWins.first?.action == nil)
+            #expect(sent.withLock { $0.first?.value(forHTTPHeaderField: "Authorization") } == "Bearer file-token")
+        }
+    }
+
     @Test func piReadsItsOwnFolderAndTheNamedOnes() {
         let home = URL(fileURLWithPath: "/Users/someone")
         #expect(PiLimits.folders(home: home, configured: []).map(\.path) == ["/Users/someone/.pi/agent"])

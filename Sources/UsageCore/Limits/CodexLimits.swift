@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 /// Codex's limits from ChatGPT, signed in with the login in each Codex home's `auth.json`: `$CODEX_HOME`
@@ -8,19 +9,78 @@ public struct CodexLimits: LimitsSource {
 
     public init() {}
 
+    struct Login: Equatable {
+        var token: String?
+        var accountID: String?
+        var waitingOn: Keychain.Item?
+
+        var id: String { "codex:" + (accountID ?? waitingOn?.account ?? "default") }
+    }
+
     public func fetch() async -> [AccountLimits] {
-        let logins: [(token: String, accountID: String?)] = Self.homes().compactMap { home in
-            guard let auth = JSONValue.object(file: home.appendingPathComponent("auth.json")),
-                  let tokens = auth["tokens"] as? [String: Any], let token = tokens["access_token"] as? String else {
-                // Missing, or signed in with an API key, which has no plan limits.
+        await fetch(home: .home)
+    }
+
+    func fetch(home: URL = .home, configured: [String] = EnvironmentFolders.seen("CODEX_HOME"),
+               keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password) async -> [AccountLimits] {
+        let logins: [Login] = Self.homes(home: home, configured: configured).compactMap { folder in
+            if let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")),
+               let login = Self.login(auth) {
+                return login
+            }
+            guard Self.usesKeyring(folder) else { return nil }
+            let item = Self.keychainItem(for: folder)
+            switch keychain(item) {
+            case .password(let raw):
+                return JSONValue.object(Data(raw.utf8)).flatMap(Self.login)
+            case .needsPermission:
+                return Login(waitingOn: item)
+            case .missing:
                 return nil
             }
-            let accountID = tokens["account_id"] as? String ?? JWT.claims(token)?[path: "https://api.openai.com/auth", "chatgpt_account_id"] as? String
-            return (token, accountID)
         }
-        return await LimitsSources.readings(of: logins, id: { "codex:" + ($0.accountID ?? "default") }) { login in
-            await Self.limits(token: login.token, accountID: login.accountID, provider: .codex, renew: "Run `codex` to renew it.")
+        return await LimitsSources.readings(of: logins, id: \.id) { login in
+            guard let token = login.token else {
+                if let item = login.waitingOn { Keychain.wait(login.id, on: item) }
+                return AccountLimits(id: login.id, provider: .codex,
+                                     problem: "To see these limits, allow access to Codex's login and choose Always Allow.",
+                                     action: .allowKeychain)
+            }
+            return await Self.limits(token: token, accountID: login.accountID, provider: .codex, renew: "Run `codex` to renew it.")
         }
+    }
+
+    private static func login(_ auth: [String: Any]) -> Login? {
+        guard let tokens = auth["tokens"] as? [String: Any], let token = tokens["access_token"] as? String, !token.isEmpty else {
+            // Missing, or signed in with an API key, which has no plan limits.
+            return nil
+        }
+        let accountID = tokens["account_id"] as? String ?? JWT.claims(token)?[path: "https://api.openai.com/auth", "chatgpt_account_id"] as? String
+        return Login(token: token, accountID: accountID)
+    }
+
+    static func keychainItem(for home: URL) -> Keychain.Item {
+        let canonical: String
+        if let resolved = realpath(home.path, nil) {
+            canonical = String(cString: resolved)
+            free(resolved)
+        } else {
+            canonical = home.path
+        }
+        let hash = SHA256.hash(data: Data(canonical.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+        return Keychain.Item(service: "Codex Auth", account: "cli|" + hash)
+    }
+
+    private static func usesKeyring(_ home: URL) -> Bool {
+        guard let toml = try? String(contentsOf: home.appendingPathComponent("config.toml"), encoding: .utf8) else { return false }
+        for line in toml.split(whereSeparator: \.isNewline) {
+            let uncommented = line.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? ""
+            let parts = uncommented.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard parts.count == 2, parts[0] == "cli_auth_credentials_store" else { continue }
+            let value = parts[1].trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return value == "keyring" || value == "auto"
+        }
+        return false
     }
 
     /// Codex homes with a login, the one Codex uses by default first.
@@ -34,7 +94,10 @@ public struct CodexLimits: LimitsSource {
             homes += names.sorted().filter { $0.hasPrefix(prefix) }.map { parent.appendingPathComponent($0) }
         }
         var seen: Set<String> = []
-        return homes.filter { FileManager.default.fileExists(atPath: $0.appendingPathComponent("auth.json").path) && seen.insert($0.standardizedFileURL.path).inserted }
+        return homes.filter {
+            (FileManager.default.fileExists(atPath: $0.appendingPathComponent("auth.json").path) || usesKeyring($0))
+                && seen.insert($0.standardizedFileURL.path).inserted
+        }
     }
 
     /// One ChatGPT login's limits. Pi signs in to ChatGPT too, so it reads its login through here.
