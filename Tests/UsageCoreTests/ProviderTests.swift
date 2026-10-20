@@ -59,6 +59,35 @@ struct ProviderTests {
         #expect(gpt6.tokens == TokenCounts(input: 400, output: 10, cacheRead: 100))
     }
 
+    @Test func truncatedZstdIsAcceptedAsComplete() throws {
+        guard Zstd.isAvailable else { return }
+        let home = try TempProjects()
+        let line = Data((codexTokenCount("2026-10-18T10:00:00Z", last: codexUsage(100, cached: 0, output: 10), total: codexUsage(100, cached: 0, output: 10)) + "\n").utf8)
+        let blockHeader = UInt32(line.count << 3) | 1
+        let header: [UInt8] = [
+            0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x00,
+            UInt8(blockHeader & 0xFF), UInt8((blockHeader >> 8) & 0xFF), UInt8((blockHeader >> 16) & 0xFF),
+        ]
+        let frame = Data(header) + line
+
+        let validURL = home.root.appendingPathComponent("valid.jsonl.zst")
+        try frame.write(to: validURL)
+        var validRecord = FileRecord(isSubagent: false)
+        validRecord.size = UInt64(frame.count)
+        #expect(TranscriptReader.read(path: validURL.path, into: &validRecord, ingest: CodexTranscripts.ingest))
+        #expect(validRecord.usage.count == 1)
+        #expect(validRecord.offset == validRecord.size)
+
+        let truncated = frame.dropLast(6)
+        let truncatedURL = home.root.appendingPathComponent("truncated.jsonl.zst")
+        try truncated.write(to: truncatedURL)
+        var record = FileRecord(isSubagent: false)
+        record.size = UInt64(truncated.count)
+        let success = TranscriptReader.read(path: truncatedURL.path, into: &record) { _, _, _, _ in true }
+        #expect(!success)
+        #expect(record.offset == 0)
+    }
+
     // MARK: Pi
 
     @Test func piCountsForkCopiesOnceAndCompactions() async throws {

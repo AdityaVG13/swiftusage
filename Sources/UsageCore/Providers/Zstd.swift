@@ -67,6 +67,7 @@ enum Zstd {
         private let inputCapacity = 1 << 20
         private var inBuffer = InBuffer(source: nil, size: 0, position: 0)
         private var finished = false
+        private var lastResult = 0
 
         init?(fd: Int32) {
             guard let library = Zstd.library, let context = library.create() else { return nil }
@@ -90,7 +91,11 @@ enum Zstd {
                     if finished { break }
                     let n = Foundation.read(fd, input, inputCapacity)
                     if n < 0 { if errno == EINTR { continue }; return -1 }
-                    if n == 0 { finished = true; break }
+                    if n == 0 {
+                        if lastResult != 0 { return -1 }
+                        finished = true
+                        break
+                    }
                     inBuffer.size = n
                     inBuffer.position = 0
                 }
@@ -100,6 +105,7 @@ enum Zstd {
                     }
                 }
                 if library.isError(result) != 0 { return -1 }
+                lastResult = result
                 // A frame ended and there's no input left to start another.
                 if result == 0, inBuffer.position == inBuffer.size, out.position > 0 { break }
             }
