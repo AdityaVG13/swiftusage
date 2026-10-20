@@ -345,11 +345,13 @@ private struct MeterBar: View {
 
 /// How limits read in the panel, the caption and the menu bar.
 enum LimitText {
-    /// `67%`, `$3/$250` for a dollar limit, or `120/500` for an allowance of requests.
+    /// `67%`, `$3/$250` for a dollar limit, or `120/500` for an allowance of requests (`12.3K/100K` once
+    /// the allowance is too long for the column; the caption has the whole numbers).
     static func used(_ meter: LimitMeter) -> String {
         switch meter.unit {
         case .percent: String(format: "%.0f%%", meter.used.rounded(.down))
         case .dollars: compactDollars(meter.used) + "/" + compactDollars(meter.limit)
+        case .count where meter.limit >= 10_000: compactCount(meter.used) + "/" + compactCount(meter.limit)
         case .count: Format.grouped(Int(meter.used)) + "/" + Format.grouped(Int(meter.limit))
         }
     }
@@ -399,6 +401,13 @@ enum LimitText {
         let hours = minutes / 60
         if hours < 24 { return "\(hours)h \(minutes % 60)m" }
         return "\(hours / 24)d \(hours % 24)h"
+    }
+
+    /// `12.3K`, and `100K` rather than `100.0K`.
+    private static func compactCount(_ value: Double) -> String {
+        let label = Format.compact(Int64(value))
+        guard let unit = label.last, unit.isLetter, label.dropLast().hasSuffix(".0") else { return label }
+        return label.dropLast(3) + String(unit)
     }
 
     private static func compactDollars(_ value: Double) -> String {
