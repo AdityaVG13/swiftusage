@@ -273,6 +273,25 @@ struct LimitsTests {
         #expect(AntigravityLimits.plan(paid: ["name": "Google AI Ultra"], current: nil) == "Ultra")
     }
 
+    @Test func antigravityWeeklyIdentityDoesNotChangeNearReset() {
+        let reset = now.addingTimeInterval(7 * 3600)
+        let models: [String: Any] = [
+            "gemini-fixture": [
+                "displayName": "Gemini Fixture",
+                "quotaInfo": ["remainingFraction": 0.2, "resetTime": reset.timeIntervalSince1970],
+            ],
+        ]
+        let remembered = AntigravityLimits.weeklyResets(in: models, now: now)
+        let early = AntigravityLimits.modelMeters(models, now: now, weeklyResets: remembered)
+        let late = AntigravityLimits.modelMeters(models, now: reset.addingTimeInterval(-2 * 3600), weeklyResets: remembered)
+        #expect(early.map(\.id) == ["gemini-weekly"])
+        #expect(late.map(\.id) == ["gemini-weekly"])
+        #expect(late.first?.period == 604_800)
+        let freshSession = AntigravityLimits.modelMeters(models, now: reset.addingTimeInterval(-4 * 3600))
+        #expect(freshSession.map(\.id) == ["gemini-5h"])
+        #expect(freshSession.first?.period == 18_000)
+    }
+
     @Test func piReadsItsSubscriptionLogins() {
         let auth = object("""
             {"anthropic":{"type":"oauth","access":"sk-ant-oat","refresh":"r","expires":1792500000000},

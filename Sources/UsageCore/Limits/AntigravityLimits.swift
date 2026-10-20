@@ -31,6 +31,7 @@ public actor AntigravityLimits: LimitsSource {
     /// Renewed access tokens, by the refresh token they came from.
     private var renewed: [String: (token: String, expires: Date, email: String?)] = [:]
     private var plans: [String: String] = [:]
+    private var weeklyResets: Set<Date> = []
 
     public init() {}
 
@@ -160,7 +161,9 @@ public actor AntigravityLimits: LimitsSource {
             switch response.status {
             case 200..<300:
                 guard let models = response.json?["models"] as? [String: Any] else { continue }
-                return .success(AccountLimits(id: "", provider: provider, plan: await plan(token: token), meters: Self.modelMeters(models)))
+                let now = Date()
+                weeklyResets = weeklyResets.union(Self.weeklyResets(in: models, now: now)).filter { $0 > now }
+                return .success(AccountLimits(id: "", provider: provider, plan: await plan(token: token), meters: Self.modelMeters(models, now: now, weeklyResets: weeklyResets)))
             case 401, 403:
                 return .rejected
             default:
@@ -255,7 +258,7 @@ public actor AntigravityLimits: LimitsSource {
     /// Per-model quotas pooled into Gemini and the rest, each split into five-hour and weekly windows by
     /// how far off the model's reset is. Zero values are left out of the answer, so a quota without a
     /// fraction is used up; a model without a quota has no limit and is skipped.
-    static func modelMeters(_ models: [String: Any], now: Date = Date()) -> [LimitMeter] {
+    static func modelMeters(_ models: [String: Any], now: Date = Date(), weeklyResets: Set<Date> = []) -> [LimitMeter] {
         var pools: [String: (label: String, period: TimeInterval, used: Double, reset: Date?)] = [:]
         for (key, value) in models {
             guard let model = value as? [String: Any], model["isInternal"] as? Bool != true,
@@ -265,7 +268,7 @@ public actor AntigravityLimits: LimitsSource {
             guard !name.lowercased().contains("argon"), !key.lowercased().contains("argon") else { continue }
             let left = min(max(JSONValue.number(quota["remainingFraction"]) ?? 0, 0), 1)
             let reset = JSONValue.date(quota["resetTime"])
-            let weekly = reset.map { $0.timeIntervalSince(now) > 6 * .hour } ?? false
+            let weekly = reset.map { $0.timeIntervalSince(now) > 5 * .hour + 600 || weeklyResets.contains($0) } ?? false
             let gemini = name.lowercased().contains("gemini")
             let id = (gemini ? "gemini" : "3p") + (weekly ? "-weekly" : "-5h")
             let label = (gemini ? "Gemini" : "Claude") + (weekly ? " Weekly" : " Session")
@@ -276,6 +279,19 @@ public actor AntigravityLimits: LimitsSource {
         return ["gemini-5h", "gemini-weekly", "3p-5h", "3p-weekly"].compactMap { id in
             pools[id].map { LimitMeter.percent(id, $0.label, used: $0.used, resetsAt: $0.reset, period: $0.period) }
         }
+    }
+
+    static func weeklyResets(in models: [String: Any], now: Date) -> Set<Date> {
+        var resets: Set<Date> = []
+        for (key, value) in models {
+            guard let model = value as? [String: Any], model["isInternal"] as? Bool != true,
+                  let name = (model["displayName"] as? String) ?? (model["label"] as? String), !name.isEmpty,
+                  let quota = model["quotaInfo"] as? [String: Any],
+                  !name.lowercased().contains("argon"), !key.lowercased().contains("argon"),
+                  let reset = JSONValue.date(quota["resetTime"]), reset.timeIntervalSince(now) > 5 * .hour + 600 else { continue }
+            resets.insert(reset)
+        }
+        return resets
     }
 
     /// Google One's tiers by ID, else the tier's name: `Google AI Pro` → `Pro`, the free tier → `Free`.
