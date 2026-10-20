@@ -343,4 +343,25 @@ extension ProviderTests {
         #expect(stats.totalTokens == 1110 + 10)
         #expect(stats.models.map(\.name) == ["Opus 5.5", "SWE 2"])
     }
+
+    @Test func devinReplacementDatabaseRetainsOldRowCursor() throws {
+        let home = try TempProjects()
+        let path = home.root.appendingPathComponent("sessions.db").path
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        run("CREATE TABLE sessions (id TEXT, created_at INTEGER, hidden INTEGER, model TEXT)")
+        run("CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY, session_id TEXT, created_at INTEGER, chat_message TEXT)")
+        run("INSERT INTO sessions VALUES ('s', 1792317600, 0, 'gpt-5')")
+        run(#"INSERT INTO message_nodes VALUES (100, 's', 1792317601, '{"message_id":"old","role":"assistant","metadata":{"metrics":{"input_tokens":100}}}')"#)
+        var database = DevinSource.Database()
+        #expect(database.read(try #require(SQLiteReader(path: path))))
+        run("DELETE FROM message_nodes")
+        run(#"INSERT INTO message_nodes VALUES (1, 's', 1792317602, '{"message_id":"new","role":"assistant","metadata":{"metrics":{"input_tokens":200}}}')"#)
+        #expect(database.read(try #require(SQLiteReader(path: path))))
+        #expect(database.lastRow == 1)
+        #expect(Array(database.messages.keys) == ["new"])
+        #expect(database.messages["new"]?.tokens.input == 200)
+    }
 }

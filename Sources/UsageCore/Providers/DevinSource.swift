@@ -95,6 +95,13 @@ public actor DevinSource: UsageSource {
             guard let hasSessions = db.hasTable("sessions"), let hasNodes = db.hasTable("message_nodes") else { return false }
             guard hasSessions, hasNodes else { return true }
             var next = self
+            if next.lastRow > 0 {
+                var maxRow: Int64 = 0
+                guard db.rows("SELECT COALESCE(MAX(row_id), 0) FROM message_nodes", [], { maxRow = $0.int(0) }) else { return false }
+                if maxRow < next.lastRow {
+                    next = Database()
+                }
+            }
             guard db.rows("SELECT id, created_at, hidden, model FROM sessions", [], { row in
                 guard let id = row.text(0), let created = Timestamp.seconds(row.double(1)) else { return }
                 next.sessions[id] = Session(created: created, hidden: row.int(2) != 0, model: row.text(3) ?? "unknown")
