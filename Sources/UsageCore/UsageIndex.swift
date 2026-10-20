@@ -94,6 +94,8 @@ public protocol TranscriptFormat: Sendable {
     /// Folds one line into its transcript's record. Returns false for a line that isn't a whole JSON
     /// object, which at the end of a file means it's still being written.
     static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool
+    /// Reads `path` from `record.offset` into `record`.
+    static func read(path: String, into record: inout FileRecord) -> Bool
     /// Folders to watch for changes, if not all of `root`.
     static func watchedPaths(root: URL) -> [String]
     /// Whether a last line without a newline is read when it parses. Formats that skip lines without
@@ -105,6 +107,9 @@ extension TranscriptFormat {
     public static var upgradableCacheVersion: Int { cacheVersion }
     public static var readsUnterminatedLastLine: Bool { false }
     public static func watchedPaths(root: URL) -> [String] { [root.path] }
+    public static func read(path: String, into record: inout FileRecord) -> Bool {
+        TranscriptReader.read(path: path, into: &record, unterminated: readsUnterminatedLastLine, ingest: ingest)
+    }
 }
 
 /// Keeps a per-transcript summary of one tool's transcripts, re-reading only bytes appended since the
@@ -237,7 +242,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                     group.addTask {
                         var record = job.record
                         let start = record.offset
-                        guard TranscriptReader.read(path: job.path, into: &record, unterminated: Format.readsUnterminatedLastLine, ingest: Format.ingest) else { return (job.key, nil, 0) }
+                        guard Format.read(path: job.path, into: &record) else { return (job.key, nil, 0) }
                         return (job.key, record, Int64(record.offset - min(start, record.offset)))
                     }
                 }

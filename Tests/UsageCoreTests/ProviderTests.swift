@@ -143,6 +143,42 @@ struct ProviderTests {
         #expect(stats.models.first?.tokens == TokenCounts(input: 200, output: 50, cacheRead: 800))
     }
 
+    @Test func grokSkipsSubagentSessions() async throws {
+        let home = try TempProjects()
+        let start = Timestamp.parse("2026-10-18T10:00:00Z")! * 1000
+        func turn(_ session: String, prompt: String, input: Int, output: Int) -> [String] {
+            let usage: [String: Any] = ["inputTokens": input, "outputTokens": output, "cachedReadTokens": 0, "cacheCreationTokens": 0, "modelCalls": 1]
+            return [
+                json(["timestamp": start / 1000, "params": ["sessionId": session, "_meta": ["agentTimestampMs": start],
+                                                             "update": ["sessionUpdate": "user_message_chunk", "_meta": ["promptIndex": 0]]]]),
+                json(["timestamp": (start + 1) / 1000, "params": ["sessionId": session, "_meta": ["agentTimestampMs": start + 1],
+                                                                   "update": ["sessionUpdate": "turn_completed", "prompt_id": prompt,
+                                                                              "usage": ["modelUsage": ["grok-4.7-build": usage]]]]]),
+            ]
+        }
+        try home.write("project/parent/updates.jsonl", turn("parent", prompt: "p1", input: 1000, output: 100))
+        try home.write("project/child/updates.jsonl", turn("child", prompt: "p2", input: 500, output: 50))
+        try home.write("project/child/summary.json", [json(["id": "child", "parent_session_id": "parent", "session_kind": "subagent"])])
+
+        let index = TranscriptIndex<GrokTranscripts>(root: home.root, cacheURL: nil)
+        let subagentStats = StatsBuilder.build(await index.refresh(), range: .all, now: now, clock: utc)
+        #expect(subagentStats.sessions == 1)
+        #expect(subagentStats.messages == 2)
+        #expect(subagentStats.totalTokens == 1100)
+
+        try home.write("project/child/summary.json", [json(["id": "child", "parent_session_id": "parent", "session_kind": "fork"])])
+        let forkStats = StatsBuilder.build(await index.refresh(), range: .all, now: now, clock: utc)
+        #expect(forkStats.sessions == 2)
+        #expect(forkStats.messages == 4)
+        #expect(forkStats.totalTokens == 1650)
+
+        try home.write("project/child/summary.json", [json(["id": "child", "parent_session_id": "parent", "session_kind": "subagent"])])
+        let revertedStats = StatsBuilder.build(await index.refresh(), range: .all, now: now, clock: utc)
+        #expect(revertedStats.sessions == 1)
+        #expect(revertedStats.messages == 2)
+        #expect(revertedStats.totalTokens == 1100)
+    }
+
     // MARK: Muse
 
     @Test func museRepeatedTurnCompletion() {

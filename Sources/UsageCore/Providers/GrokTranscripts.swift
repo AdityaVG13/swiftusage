@@ -2,12 +2,12 @@ import Foundation
 
 /// Grok's sessions: `sessions/<cwd>/<session id>/updates.jsonl`, the session's append-only event log.
 /// Usage is only logged per turn (`turn_completed`), split by model. A parent's turn already includes
-/// its subagents' usage, so their nested sessions aren't read.
+/// its subagents' usage, so sessions whose `summary.json` marks them as `subagent` aren't read.
 public enum GrokTranscripts: TranscriptFormat {
     public static let provider = Provider.grok
     public static let cacheName = "grok-index.json"
-    /// 2: turns record the cost Grok logs.
-    public static let cacheVersion = 2
+    /// 3: subagent sessions aren't read.
+    public static let cacheVersion = 3
     public static let upgradableCacheVersion = 1
 
     public static var defaultRoot: URL {
@@ -15,7 +15,25 @@ public enum GrokTranscripts: TranscriptFormat {
     }
 
     public static func discover(in root: URL) -> [String: TranscriptInfo] {
-        TranscriptFolders.files(in: root, depth: 2) { $0 == "updates.jsonl" }
+        var found = TranscriptFolders.files(in: root, depth: 2) { $0 == "updates.jsonl" }
+        for (key, var info) in found {
+            let summaryPath = (info.path as NSString).deletingLastPathComponent + "/summary.json"
+            if let summary = TranscriptInfo.of(summaryPath) {
+                info.modified = max(info.modified, summary.modified)
+                info.inode ^= summary.inode &* 0x9E37_79B9_7F4A_7C15 ^ summary.size ^ summary.modified.bitPattern
+                found[key] = info
+            }
+        }
+        return found
+    }
+
+    public static func read(path: String, into record: inout FileRecord) -> Bool {
+        let summaryURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("summary.json")
+        if let summary = JSONValue.object(file: summaryURL), summary["session_kind"] as? String == "subagent" {
+            record.offset = record.size
+            return true
+        }
+        return TranscriptReader.read(path: path, into: &record, unterminated: readsUnterminatedLastLine, ingest: ingest)
     }
 
     public static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool {
