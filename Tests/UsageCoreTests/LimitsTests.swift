@@ -351,6 +351,58 @@ struct LimitsTests {
         #expect((try? JSONDecoder().decode(AccountLimits.self, from: Data(old.utf8)))?.resets == nil)
     }
 
+    @Test func aWorkingLoginReplacesAnEarlierFailedOne() async throws {
+        let meter = LimitMeter.percent("session", "Session", used: 25, resetsAt: nil, period: nil)
+        let failed = AccountLimits.failed("claude:a|o", .claude, account: "Personal", "Login expired.")
+        let working = AccountLimits(id: "claude:a|o", provider: .claude, meters: [meter])
+
+        var tried: [String] = []
+        let fallback = await LimitsSources.readings(of: ["expired", "working"], id: { _ in "claude:a|o" }) { token in
+            tried.append(token)
+            return token == "expired" ? failed : working
+        }
+        #expect(tried == ["expired", "working"])
+        let merged = LimitsSources.merged(fallback)
+        #expect(merged.count == 1)
+        #expect(merged.first?.account == "Personal")
+        #expect(merged.first?.meters == [meter])
+        #expect(merged.first?.problem == nil)
+
+        tried = []
+        let firstWorked = await LimitsSources.readings(of: ["working", "spare"], id: { _ in "claude:a|o" }) { token in
+            tried.append(token)
+            return working
+        }
+        #expect(tried == ["working"])
+        #expect(LimitsSources.merged(firstWorked).first?.meters == [meter])
+
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-fallback-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".claude"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".claude-work"), withIntermediateDirectories: true)
+        let identity = #"{"oauthAccount":{"accountUuid":"A1","organizationUuid":"O1","organizationName":"Tasteskill"}}"#
+        try identity.write(to: home.appendingPathComponent(".claude.json"), atomically: true, encoding: .utf8)
+        try identity.write(to: home.appendingPathComponent(".claude-work/.claude.json"), atomically: true, encoding: .utf8)
+        let future = Int((now.timeIntervalSince1970 + 3600) * 1000)
+        try #"{"claudeAiOauth":{"accessToken":"expired","expiresAt":1000}}"#
+            .write(to: home.appendingPathComponent(".claude/.credentials.json"), atomically: true, encoding: .utf8)
+        try #"{"claudeAiOauth":{"accessToken":"current","expiresAt":\#(future)}}"#
+            .write(to: home.appendingPathComponent(".claude-work/.credentials.json"), atomically: true, encoding: .utf8)
+
+        let logins = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { _ in .missing }
+        let readings = await LimitsSources.readings(of: logins, id: \.id) { login in
+            if let expires = login.expires, expires < now {
+                return .failed(login.id, .claude, account: login.account, "Login expired.")
+            }
+            return AccountLimits(id: login.id, provider: .claude, account: login.account, meters: [meter])
+        }
+        let cards = LimitsSources.merged(readings)
+        #expect(cards.count == 1)
+        #expect(cards.first?.account == "Tasteskill")
+        #expect(cards.first?.meters == [meter])
+        #expect(cards.first?.problem == nil)
+    }
+
     @Test func cursorTeamPlansReadTheDashboard() {
         let summary = object("""
             {"billingCycleStart":"2026-10-01T00:00:00.000Z","billingCycleEnd":"2026-11-01T00:00:00.000Z",

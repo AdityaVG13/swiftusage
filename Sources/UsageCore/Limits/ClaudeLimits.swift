@@ -31,15 +31,11 @@ public struct ClaudeLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
-        var results: [AccountLimits] = []
-        var seen: Set<String> = []
         let logins = Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR"))
-        for login in logins where seen.insert(login.id).inserted {
-            results.append(await Self.limits(for: login))
-        }
-        let accounts = Set(logins.compactMap { $0.accountID.split(separator: "|").first.map(String.init) })
-        results += await ClaudeDesktop.limits(skippingAccounts: accounts, ids: seen)
-        return results
+        let readings = await LimitsSources.readings(of: logins, id: \.id, read: Self.limits(for:))
+        let served = Set(readings.filter(\.hasValues).map(\.id))
+        let accounts = Set(logins.filter { served.contains($0.id) }.compactMap { $0.accountID.split(separator: "|").first.map(String.init) })
+        return readings + (await ClaudeDesktop.limits(skippingAccounts: accounts, ids: served))
     }
 
     private static func limits(for login: Login) async -> AccountLimits {

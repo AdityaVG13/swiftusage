@@ -9,19 +9,18 @@ public struct CodexLimits: LimitsSource {
     public init() {}
 
     public func fetch() async -> [AccountLimits] {
-        var results: [AccountLimits] = []
-        var seen: Set<String> = []
-        for home in Self.homes() {
+        let logins: [(token: String, accountID: String?)] = Self.homes().compactMap { home in
             guard let auth = JSONValue.object(file: home.appendingPathComponent("auth.json")),
                   let tokens = auth["tokens"] as? [String: Any], let token = tokens["access_token"] as? String else {
                 // Missing, or signed in with an API key, which has no plan limits.
-                continue
+                return nil
             }
             let accountID = tokens["account_id"] as? String ?? JWT.claims(token)?[path: "https://api.openai.com/auth", "chatgpt_account_id"] as? String
-            let limits = await Self.limits(token: token, accountID: accountID, provider: .codex, renew: "Run `codex` to renew it.")
-            if seen.insert(limits.id).inserted { results.append(limits) }
+            return (token, accountID)
         }
-        return results
+        return await LimitsSources.readings(of: logins, id: { "codex:" + ($0.accountID ?? "default") }) { login in
+            await Self.limits(token: login.token, accountID: login.accountID, provider: .codex, renew: "Run `codex` to renew it.")
+        }
     }
 
     /// Codex homes with a login, the one Codex uses by default first.

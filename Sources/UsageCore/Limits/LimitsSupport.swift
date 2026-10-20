@@ -159,3 +159,19 @@ extension TimeInterval {
     static let day: TimeInterval = 86_400
     static let week: TimeInterval = 604_800
 }
+
+extension LimitsSources {
+    /// One reading per login, in order, except a login whose account an earlier login already read with
+    /// values. Readings that share an ID are left to `merged`, which keeps the one with values.
+    static func readings<Login>(of logins: [Login], id: (Login) -> String, read: (Login) async -> AccountLimits) async -> [AccountLimits] {
+        var results: [AccountLimits] = []
+        var served: Set<String> = []
+        for login in logins where !served.contains(id(login)) {
+            let reading = await read(login)
+            if reading.hasValues { served.insert(reading.id) }
+            results.append(reading)
+        }
+        return results
+    }
+}
+
