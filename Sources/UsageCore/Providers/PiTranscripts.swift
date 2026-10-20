@@ -47,11 +47,11 @@ public enum PiTranscripts: TranscriptFormat {
             if role == "user" || role == "assistant", record.messages[key] == nil {
                 record.messages[key] = FileRecord.bucket(time)
             }
-        case "compaction", "branch_summary":
-            // Summaries are model calls too. A compaction's retained tail repeats earlier entries and
-            // isn't read.
+        case "compaction", "branch_summary", "usage":
+            // Summaries and standalone usage entries (such as cache warming) are model calls too. A
+            // compaction's retained tail repeats earlier entries and isn't read.
             if let usage = entry["usage"] as? [String: Any], let counts = tokens(usage) {
-                let model = entry[path: "details", "modelId"] as? String ?? record.model ?? "unknown"
+                let model = entry["model"] as? String ?? entry[path: "details", "modelId"] as? String ?? record.model ?? "unknown"
                 record.usage[key] = UsageRecord(bucket: FileRecord.bucket(timestamp), model: model, tokens: counts, cost: cost(usage))
             }
         default:

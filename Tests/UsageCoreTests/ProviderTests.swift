@@ -120,6 +120,27 @@ struct ProviderTests {
         #expect(stats.totalTokens == 1110 + 320)
     }
 
+    @Test func piCountsStandaloneUsageEntriesOnce() async throws {
+        let home = try TempProjects()
+        let warm = json(["type": "usage", "id": "warm1", "parentId": NSNull(), "timestamp": "2026-10-18T10:00:01Z",
+                         "kind": "cache_warm", "provider": "anthropic", "model": "claude-sonnet-5",
+                         "usage": ["input": 0, "output": 0, "cacheRead": 50_000, "cacheWrite": 0, "totalTokens": 50_000, "cost": ["total": 0.015]]])
+        try home.write("--Users-me-app--/2026-10-18T10-00-00_a.jsonl", [
+            json(["type": "session", "id": "a", "timestamp": "2026-10-18T10:00:00Z"]),
+            warm,
+        ])
+        try home.write("--Users-me-app--/2026-10-18T11-00-00_b.jsonl", [
+            json(["type": "session", "id": "b", "timestamp": "2026-10-18T11:00:00Z", "parentSession": "a"]),
+            warm,
+        ])
+        let data = await TranscriptIndex<PiTranscripts>(root: home.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.totalTokens == 50_000)
+        #expect(abs(stats.cost - 0.015) < 1e-9)
+        #expect(stats.messages == 0)
+        #expect(stats.models.map(\.name) == ["Sonnet 5"])
+    }
+
     // MARK: Grok
 
     @Test func grokSplitsCachedInputAndCountsPrompts() async throws {
