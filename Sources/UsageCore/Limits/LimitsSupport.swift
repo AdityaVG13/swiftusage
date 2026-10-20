@@ -22,12 +22,31 @@ enum HTTP {
         }
     }
 
+    private final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
+        func urlSession(
+            _ session: URLSession,
+            task: URLSessionTask,
+            willPerformHTTPRedirection response: HTTPURLResponse,
+            newRequest request: URLRequest,
+            completionHandler: @escaping @Sendable (URLRequest?) -> Void
+        ) {
+            if let original = task.originalRequest?.url, let target = request.url,
+               let scheme = original.scheme?.lowercased(), let host = original.host?.lowercased(),
+               scheme == target.scheme?.lowercased(), host == target.host?.lowercased(),
+               original.port == target.port {
+                completionHandler(request)
+            } else {
+                completionHandler(nil)
+            }
+        }
+    }
+
     private static let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
         configuration.httpAdditionalHeaders = ["User-Agent": "swiftusage/1.0"]
-        return URLSession(configuration: configuration)
+        return URLSession(configuration: configuration, delegate: SameOriginRedirects(), delegateQueue: nil)
     }()
 
     static func get(_ url: String, headers: [String: String] = [:], timeout: TimeInterval = 15) async -> Response? {

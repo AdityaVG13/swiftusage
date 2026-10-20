@@ -655,4 +655,109 @@ struct LimitsTests {
         #expect(cards.first?.meters.first?.used == 0)
         #expect(cards.first?.meters.first?.resetsAt == nil)
     }
+
+    @Test func loopbackCrossOriginRedirectBehavior() async throws {
+        let other = try LoopbackServer { _, _ in
+            (200, ["Content-Type": "application/json"], #"{"leaked":true}"#)
+        }
+        defer { other.stop() }
+        let origin = try LoopbackServer { request, port in
+            if request.hasPrefix("GET /same ") {
+                return (307, ["Location": "http://127.0.0.1:\(port)/landed"], "")
+            }
+            if request.hasPrefix("GET /landed ") {
+                return (200, ["Content-Type": "application/json"], #"{"sameOrigin":true}"#)
+            }
+            return (307, ["Location": "http://localhost:\(other.port)/landing"], "")
+        }
+        defer { origin.stop() }
+
+        let getCross = try #require(await HTTP.get(
+            "http://127.0.0.1:\(origin.port)/start",
+            headers: ["Authorization": "Bearer fixture-only", "Cookie": "fixture-cookie=only"]
+        ))
+        #expect(getCross.status == 307)
+
+        let postCross = try #require(await HTTP.post(
+            "http://127.0.0.1:\(origin.port)/start",
+            json: ["metadata": ["apiKey": "fixture-only"]]
+        ))
+        #expect(postCross.status == 307)
+        #expect(other.requests.isEmpty)
+
+        let sameOrigin = try #require(await HTTP.get("http://127.0.0.1:\(origin.port)/same"))
+        #expect(sameOrigin.status == 200)
+        #expect(sameOrigin.json?["sameOrigin"] as? Bool == true)
+    }
 }
+
+private final class LoopbackServer: @unchecked Sendable {
+    let port: Int
+    private let fd: Int32
+    private let lock = NSLock()
+    private var seen: [String] = []
+
+    var requests: [String] { lock.withLock { seen } }
+
+    init(handler: @escaping @Sendable (String, Int) -> (status: Int, headers: [String: String], body: String)) throws {
+        let sock = socket(AF_INET, SOCK_STREAM, 0)
+        try #require(sock >= 0)
+        var yes: Int32 = 1
+        _ = setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = 0
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(sock, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        try #require(bound == 0)
+        try #require(listen(sock, 16) == 0)
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(sock, $0, &len) }
+        }
+        let port = Int(UInt16(bigEndian: addr.sin_port))
+        self.fd = sock
+        self.port = port
+        let lock = self.lock
+        Thread.detachNewThread {
+            while true {
+                let client = accept(sock, nil, nil)
+                if client < 0 { break }
+                var data = Data()
+                var buffer = [UInt8](repeating: 0, count: 4096)
+                while true {
+                    let n = read(client, &buffer, buffer.count)
+                    if n <= 0 { break }
+                    data.append(buffer, count: n)
+                    if let range = data.range(of: Data("\r\n\r\n".utf8)) {
+                        let headerText = String(decoding: data[..<range.lowerBound], as: UTF8.self)
+                        let length = headerText.split(separator: "\r\n").compactMap { line -> Int? in
+                            let parts = line.split(separator: ":", maxSplits: 1)
+                            guard parts.count == 2, parts[0].lowercased() == "content-length" else { return nil }
+                            return Int(parts[1].trimmingCharacters(in: .whitespaces))
+                        }.first ?? 0
+                        if data.count >= range.upperBound + length { break }
+                    }
+                }
+                let request = String(decoding: data, as: UTF8.self)
+                lock.withLock { self.seen.append(request) }
+                let reply = handler(request, port)
+                let body = Data(reply.body.utf8)
+                var response = "HTTP/1.1 \(reply.status) OK\r\nConnection: close\r\nContent-Length: \(body.count)\r\n"
+                for (name, value) in reply.headers { response += "\(name): \(value)\r\n" }
+                response += "\r\n"
+                let payload = Data(response.utf8) + body
+                _ = payload.withUnsafeBytes { write(client, $0.baseAddress, payload.count) }
+                close(client)
+            }
+        }
+    }
+
+    func stop() {
+        close(fd)
+    }
+}
+
