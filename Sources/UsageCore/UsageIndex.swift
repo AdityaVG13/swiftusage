@@ -130,9 +130,10 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     /// The last aggregate, reused while no transcript changes.
     private var aggregated: UsageData?
 
-    public init(root: URL, cacheURL: URL?) {
+    public init(root: URL, cacheURL: URL?, readOnly: Bool = false) {
         self.root = root
         self.cacheURL = cacheURL
+        savingDisabled = readOnly
     }
 
     public static var defaultCacheURL: URL {

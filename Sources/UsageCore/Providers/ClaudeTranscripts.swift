@@ -52,8 +52,8 @@ public enum ClaudeTranscripts: TranscriptFormat {
 public typealias UsageIndex = TranscriptIndex<ClaudeTranscripts>
 
 extension TranscriptIndex where Format == ClaudeTranscripts {
-    public init(projectsURL: URL = ClaudeTranscripts.defaultRoot, cacheURL: URL? = UsageIndex.defaultCacheURL) {
-        self.init(root: projectsURL, cacheURL: cacheURL)
+    public init(projectsURL: URL = ClaudeTranscripts.defaultRoot, cacheURL: URL? = UsageIndex.defaultCacheURL, readOnly: Bool = false) {
+        self.init(root: projectsURL, cacheURL: cacheURL, readOnly: readOnly)
     }
 
     public nonisolated var projectsURL: URL { root }

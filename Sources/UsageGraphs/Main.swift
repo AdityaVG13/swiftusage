@@ -65,19 +65,18 @@ enum Dump {
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             if json {
-                let data = await UsageIndex(cacheURL: cold ? nil : UsageIndex.defaultCacheURL).refresh()
+                let data = await UsageIndex(cacheURL: cold ? nil : UsageIndex.defaultCacheURL, readOnly: true).refresh()
                 FileHandle.standardOutput.write(jsonReport(data))
                 print()
                 done.signal()
                 return
             }
             let prices = await PriceUpdates.shared.current()
-            for source in UsageSources.all(cached: !cold) where only == nil || source.provider == only {
+            for source in UsageSources.all(cached: !cold, readOnly: true) where only == nil || source.provider == only {
                 let started = Date()
                 let data = await source.refresh(progress: nil)
                 let elapsed = Date().timeIntervalSince(started)
                 print("== \(source.provider.name)  transcripts: \(data.transcriptCount)  scan: \(String(format: "%.2f", elapsed))s  responses: \(data.usage.count)")
-                if !cold { await source.save() }
                 for range in StatsRange.allCases {
                     let s = StatsBuilder.build(data, range: range, prices: prices)
                     print("  [\(range.rawValue)] sessions \(Format.grouped(s.sessions))  messages \(Format.grouped(s.messages))  tokens \(Format.compact(s.totalTokens)) (\(s.totalTokens))  cost \(Format.dollars(s.cost))  active days \(s.activeDays)  peak hour \(s.peakHour.map(Format.hour) ?? "–")  favorite \(s.favoriteModel?.name ?? "–")")

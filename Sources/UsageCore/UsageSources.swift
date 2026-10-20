@@ -2,10 +2,10 @@ import Foundation
 
 public enum UsageSources {
     /// Every provider's source, reading from where the tool keeps its history. Without `cached`, saved
-    /// indexes are neither read nor written.
-    public static func all(cached: Bool = true) -> [any UsageSource] {
+    /// indexes are neither read nor written; with `readOnly`, they are never written.
+    public static func all(cached: Bool = true, readOnly: Bool = false) -> [any UsageSource] {
         func index<Format: TranscriptFormat>(_ format: Format.Type, root: URL) -> TranscriptIndex<Format> {
-            TranscriptIndex<Format>(root: root, cacheURL: cached ? TranscriptIndex<Format>.defaultCacheURL : nil)
+            TranscriptIndex<Format>(root: root, cacheURL: cached ? TranscriptIndex<Format>.defaultCacheURL : nil, readOnly: readOnly)
         }
         return [
             index(CodexTranscripts.self, root: CodexTranscripts.defaultRoot),

@@ -263,4 +263,15 @@ struct IndexTests {
         await fresh.save()
         #expect(try String(contentsOf: cache.appendingPathExtension("unreadable"), encoding: .utf8) == "{not json")
     }
+
+    @Test func readOnlyIndexLeavesNoCacheFile() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_1")])
+
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: cache, readOnly: true)
+        let data = await index.refresh()
+        #expect(StatsBuilder.build(data, range: .all, now: now, clock: utc).messages == 2)
+        #expect(!FileManager.default.fileExists(atPath: cache.path))
+    }
 }
