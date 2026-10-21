@@ -14,22 +14,32 @@ public enum GrokTranscripts: TranscriptFormat {
         (URL.environment("GROK_HOME") ?? .home.appendingPathComponent(".grok")).appendingPathComponent("sessions")
     }
 
+    /// A session counts as changed when its `summary.json` does, which can make it a subagent or stop it
+    /// being one.
     public static func discover(in root: URL) -> [String: TranscriptInfo] {
         var found = TranscriptFolders.files(in: root, depth: 2) { $0 == "updates.jsonl" }
         for (key, var info) in found {
             let summaryPath = (info.path as NSString).deletingLastPathComponent + "/summary.json"
             if let summary = TranscriptInfo.of(summaryPath) {
                 info.modified = max(info.modified, summary.modified)
-                info.inode ^= summary.inode &* 0x9E37_79B9_7F4A_7C15 ^ summary.size ^ summary.modified.bitPattern
                 found[key] = info
             }
         }
         return found
     }
 
+    /// Grok rewrites `summary.json` with every update, so the log is read on from where it was left unless
+    /// the summary changed whether the session is a subagent.
     public static func read(path: String, into record: inout FileRecord) -> Bool {
         let summaryURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("summary.json")
-        if let summary = JSONValue.object(file: summaryURL), summary["session_kind"] as? String == "subagent" {
+        let subagent = JSONValue.object(file: summaryURL)?["session_kind"] as? String == "subagent"
+        if subagent != (record.context?["subagent"] != nil) {
+            var fresh = FileRecord(isSubagent: record.isSubagent)
+            (fresh.size, fresh.modified, fresh.inode) = (record.size, record.modified, record.inode)
+            fresh.context = subagent ? ["subagent": "1"] : nil
+            record = fresh
+        }
+        if subagent {
             record.offset = record.size
             return true
         }

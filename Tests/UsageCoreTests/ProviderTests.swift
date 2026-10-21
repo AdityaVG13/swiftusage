@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import UsageCore
 
@@ -241,6 +242,29 @@ struct ProviderTests {
         #expect(revertedStats.sessions == 1)
         #expect(revertedStats.messages == 2)
         #expect(revertedStats.totalTokens == 1100)
+    }
+
+    @Test func grokReadsOnlyWhatAnActiveSessionAppended() async throws {
+        let home = try TempProjects()
+        let start = Timestamp.parse("2026-10-18T10:00:00Z")! * 1000
+        func turn(_ prompt: String, at offset: Double) -> String {
+            let usage: [String: Any] = ["inputTokens": 1000, "outputTokens": 100, "cachedReadTokens": 0, "cacheCreationTokens": 0, "modelCalls": 1]
+            return json(["timestamp": (start + offset) / 1000, "params": ["sessionId": "s", "_meta": ["agentTimestampMs": start + offset],
+                                                                          "update": ["sessionUpdate": "turn_completed", "prompt_id": prompt,
+                                                                                     "usage": ["modelUsage": ["grok-4.7-build": usage]]]]])
+        }
+        try home.write("project/s/updates.jsonl", [turn("p1", at: 0)])
+        try home.write("project/s/summary.json", [json(["id": "s", "session_kind": "main", "num_messages": 1])])
+        let index = TranscriptIndex<GrokTranscripts>(root: home.root, cacheURL: nil)
+        _ = await index.refresh()
+
+        let appended = turn("p2", at: 60_000) + "\n"
+        try home.append("project/s/updates.jsonl", appended)
+        try home.write("project/s/summary.json", [json(["id": "s", "session_kind": "main", "num_messages": 2])])
+        let read = Mutex<Int64>(0)
+        let data = await index.refresh { progress in read.withLock { $0 = max($0, progress.bytesTotal) } }
+        #expect(read.withLock { $0 } == Int64(appended.utf8.count))
+        #expect(StatsBuilder.build(data, range: .all, now: now, clock: utc).totalTokens == 2200)
     }
 
     // MARK: Muse
