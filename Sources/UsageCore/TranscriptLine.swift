@@ -25,6 +25,14 @@ public struct TokenCounts: Codable, Sendable, Hashable {
     enum CodingKeys: String, CodingKey {
         case input = "i", output = "o", cacheRead = "r", cacheWrite = "w"
     }
+
+    /// A saved count is held to what the parsers write (an earlier version kept a corrupt line's negative
+    /// count), so no sum of them can overflow, without losing the rest of the index over one.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        func count(_ key: CodingKeys) throws -> Int64 { TokenCount.clamped(try container.decode(Int64.self, forKey: key)) }
+        self.init(input: try count(.input), output: try count(.output), cacheRead: try count(.cacheRead), cacheWrite: try count(.cacheWrite))
+    }
 }
 
 /// The fields of one transcript line that the stats need. Everything else is skipped unparsed.
@@ -325,6 +333,10 @@ enum TokenCount {
 
     static func parse(_ value: Int64) -> Int64? {
         0 <= value && value <= max ? value : nil
+    }
+
+    static func clamped(_ value: Int64) -> Int64 {
+        Swift.min(Swift.max(value, 0), max)
     }
 
     static func parse(_ value: Double) -> Int64? {

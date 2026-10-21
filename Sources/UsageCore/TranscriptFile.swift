@@ -40,7 +40,7 @@ public struct UsageRecord: Codable, Sendable, Hashable {
         bucket = try container.decode(Int32.self, forKey: .bucket)
         model = try container.decode(String.self, forKey: .model)
         tokens = try container.decode(TokenCounts.self, forKey: .tokens)
-        cacheWriteHour = try container.decodeIfPresent(Int64.self, forKey: .cacheWriteHour) ?? 0
+        cacheWriteHour = TokenCount.clamped(try container.decodeIfPresent(Int64.self, forKey: .cacheWriteHour) ?? 0)
         speed = try container.decodeIfPresent(Speed.self, forKey: .speed) ?? .standard
         cost = try container.decodeIfPresent(Double.self, forKey: .cost).flatMap { $0.isFinite ? $0 : nil }
     }

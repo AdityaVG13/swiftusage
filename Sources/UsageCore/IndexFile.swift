@@ -201,7 +201,7 @@ enum IndexFile {
                     let id = try u64()
                     var usage = UsageRecord(bucket: try i32(), model: try stringRef(), tokens: try tokens())
                     let flags = try u8()
-                    if flags & 1 != 0 { usage.cacheWriteHour = try i64() }
+                    if flags & 1 != 0 { usage.cacheWriteHour = try count() }
                     if flags & 2 != 0 {
                         guard let speed = Speed(rawValue: try u8()) else { throw Damaged() }
                         usage.speed = speed
@@ -248,8 +248,14 @@ enum IndexFile {
             return strings[index]
         }
 
+        /// A token count held to what the parsers write, never below zero or past `TokenCount.max`, so no sum
+        /// of them can overflow.
+        mutating func count() throws -> Int64 {
+            TokenCount.clamped(try i64())
+        }
+
         mutating func tokens() throws -> TokenCounts {
-            TokenCounts(input: try i64(), output: try i64(), cacheRead: try i64(), cacheWrite: try i64())
+            TokenCounts(input: try count(), output: try count(), cacheRead: try count(), cacheWrite: try count())
         }
     }
 }

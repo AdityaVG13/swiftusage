@@ -628,6 +628,21 @@ struct IndexFileTests {
         }
     }
 
+    @Test func savedCountsNoParserWritesAreHeldToTheirRange() throws {
+        var record = FileRecord(isSubagent: false)
+        record.usage = [1: UsageRecord(bucket: 1, model: "m", tokens: TokenCounts(input: .max, output: .max), cacheWriteHour: -1)]
+        record.runningTotal = TokenCounts(input: -5)
+        let read = try #require(IndexFile.decode(Data(IndexFile.encode(version: 3, root: "/r", records: ["a": record]))))
+        let usage = try #require(read.records["a"]?.usage[1])
+        #expect(usage.tokens == TokenCounts(input: TokenCount.max, output: TokenCount.max))
+        #expect(usage.tokens.total == 2 * TokenCount.max)
+        #expect(usage.cacheWriteHour == 0)
+        #expect(read.records["a"]?.runningTotal == TokenCounts())
+        let legacy = try JSONDecoder().decode(UsageRecord.self, from: Data(#"{"b":1,"m":"m","t":{"i":9223372036854775807,"o":-3,"r":0,"w":0},"h":-1}"#.utf8))
+        #expect(legacy.tokens == TokenCounts(input: TokenCount.max))
+        #expect(legacy.cacheWriteHour == 0)
+    }
+
     @Test func anIndexSavedAsJSONIsReadAndSavedAgainInBinary() async throws {
         let projects = try TempProjects()
         let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
