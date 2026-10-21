@@ -910,11 +910,16 @@ struct LimitsTests {
             }
         }
         let weekly = Date(timeIntervalSince1970: Timestamp.parse("2026-10-22T00:00:00Z")!)
-        #expect(await read(planAnswers: true)?.meters.first?.resetsAt == weekly)
-        let unanswered = await read(planAnswers: false)
+        let readOn = { (day: String, answers: Bool) in await HTTP.$now.withValue({ Date(timeIntervalSince1970: Timestamp.parse(day)!) }) { await read(planAnswers: answers) } }
+        #expect(await readOn("2026-10-20T12:00:00Z", true)?.meters.first?.resetsAt == weekly)
+        let unanswered = await readOn("2026-10-20T13:00:00Z", false)
         #expect(unanswered?.meters.first?.resetsAt == weekly)
         #expect(unanswered?.meters.first?.period == 604_800)
         #expect(unanswered?.plan == "Pro")
+        // A week on, the remembered plan's reset has passed: it moves on by whole weeks, keeping Cursor's count.
+        let weekOn = await readOn("2026-10-29T12:00:00Z", false)
+        #expect(weekOn?.meters.first?.resetsAt == weekly.addingTimeInterval(2 * 604_800))
+        #expect(weekOn?.meters.first?.used == 40)
     }
 
     @Test func cursorFallsBackForIncludedUsageAlongsideConnectOverage() async throws {

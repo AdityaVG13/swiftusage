@@ -127,7 +127,7 @@ public struct CursorLimits: LimitsSource {
         default: return .failed(id, provider, account: email, plan: plan, "Cursor's usage API answered HTTP \(usageResponse.status).")
         }
         guard let usage = usageResponse.json else { return .failed(id, provider, account: email, plan: plan, "Cursor's usage API sent something unexpected.") }
-        var result = Self.limits(usage, planInfo: planInfo, id: id, account: email, plan: plan)
+        var result = Self.limits(usage, planInfo: planInfo, id: id, account: email, plan: plan, remembered: answered == nil ? HTTP.now() : nil)
         if !result.meters.contains(where: { $0.id == "total" || $0.id == "auto" }) {
             // Team and enterprise plans report through the dashboard's own endpoints instead.
             let user = Self.subject(token).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
@@ -206,7 +206,9 @@ public struct CursorLimits: LimitsSource {
 
     /// Money is in cents. The period is the billing month, or a week on plans whose included usage resets
     /// weekly.
-    static func limits(_ usage: [String: Any], planInfo: [String: Any]?, id: String, account: String?, plan: String?) -> AccountLimits {
+    /// `remembered` is now, when `planInfo` is an earlier reading's rather than this one's.
+    static func limits(_ usage: [String: Any], planInfo: [String: Any]?, id: String, account: String?, plan: String?,
+                       remembered now: Date? = nil) -> AccountLimits {
         var result = AccountLimits(id: id, provider: .cursor, account: account, plan: plan)
         let start = JSONValue.date(usage["billingCycleStart"]), end = JSONValue.date(usage["billingCycleEnd"])
         var reset = end
@@ -215,6 +217,10 @@ public struct CursorLimits: LimitsSource {
             // The billing month's end isn't the week's.
             reset = JSONValue.date(planInfo?["includedUsageResetsAt"])
             period = .week
+            // A remembered plan's week may be over; this reading's count is for the current one.
+            if let now, let passed = reset, passed <= now {
+                reset = passed.addingTimeInterval(.week * ((now.timeIntervalSince(passed) / .week).rounded(.down) + 1))
+            }
         }
 
         if let planUsage = usage["planUsage"] as? [String: Any] {
