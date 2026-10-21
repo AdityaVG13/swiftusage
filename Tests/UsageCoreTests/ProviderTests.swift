@@ -431,6 +431,29 @@ struct ProviderTests {
         #expect(second.usage.count == 2)
     }
 
+    @Test func anOpenCodeRowStampedAheadDoesntHideTheNextOnes() async throws {
+        let home = try TempProjects()
+        let path = home.root.appendingPathComponent("opencode.db").path
+        var db: OpaquePointer?
+        #expect(sqlite3_open(path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        func run(_ sql: String) { #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK) }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        func message(_ id: String, at time: Int64) -> String {
+            #"INSERT INTO message VALUES ('\#(id)', 's', \#(time), \#(time), '{"role":"assistant","modelID":"gpt-5","tokens":{"input":100,"output":10}}')"#
+        }
+        run("CREATE TABLE session (id TEXT, parent_id TEXT, time_created INTEGER)")
+        run("CREATE TABLE message (id TEXT, session_id TEXT, time_created INTEGER, time_updated INTEGER, data TEXT)")
+        run("INSERT INTO session VALUES ('s', NULL, \(now - 60_000))")
+        // Written while the clock was an hour ahead, before it was set right.
+        run(message("ahead", at: now + 3_600_000))
+        let source = OpenCodeSource(root: home.root, databaseOverride: nil)
+        #expect(await source.refresh().usage.count == 1)
+        run(message("after", at: now))
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(5)], ofItemAtPath: path)
+        #expect(await source.refresh().usage.count == 2)
+    }
+
     @Test func openCodeResolvesRelativeDatabaseOverrideAndIgnoresMemory() async throws {
         let home = try TempProjects()
         let other = try TempProjects()

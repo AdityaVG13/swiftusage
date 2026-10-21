@@ -156,7 +156,9 @@ public actor OpenCodeSource: UsageSource {
                 }
                 guard ok else { return false }
             }
-            next.since = latest
+            // A row stamped ahead of the clock (written before the clock was set back) mustn't move the window
+            // past the rows written after it.
+            next.since = min(latest, Int64(Date().timeIntervalSince1970 * 1000))
             self = next
             return true
         }
