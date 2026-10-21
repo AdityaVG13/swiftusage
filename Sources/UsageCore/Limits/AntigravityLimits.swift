@@ -75,14 +75,18 @@ public actor AntigravityLimits: LimitsSource {
     func fetch(home: URL = .home, keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password) async -> [AccountLimits] {
         let (logins, waitingOn) = Self.logins(home: home, keychain: keychain)
         var results: [AccountLimits] = []
-        var seen: Set<String> = []
+        var served: Set<String> = []
         for login in logins {
-            // Renewing names the account, which tells one person's two logins from two people's.
+            // Renewing names the account, which tells one person's two logins from two people's. Another
+            // login for an account is asked only while none of its readings has worked.
             let session = await session(for: login)
             let id = "antigravity:" + (session.email?.lowercased() ?? (login.refresh ?? login.access ?? "").sha256Prefix)
-            guard seen.insert(id).inserted else { continue }
-            results.append(await limits(session, id: id, provider: provider))
+            guard !served.contains(id) else { continue }
+            let reading = await limits(session, id: id, provider: provider)
+            if reading.hasValues { served.insert(id) }
+            results.append(reading)
         }
+        results = LimitsSources.merged(results)
         if let item = waitingOn {
             let id = "antigravity:keychain"
             Keychain.wait(id, on: item)

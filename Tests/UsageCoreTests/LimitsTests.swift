@@ -446,6 +446,41 @@ struct LimitsTests {
         #expect(cards.last?.action == .allowKeychain)
     }
 
+    @Test func aRefusedAntigravityLoginDoesntHideAWorkingOneForTheSameAccount() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let emails = folder.appendingPathComponent("antigravity-accounts.json")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        // The app's login was once renewed as this account; Google has since refused its refresh token.
+        try JSONEncoder().encode(["1//refused".sha256Prefix: "a@b.c"]).write(to: emails)
+        let nowhere = folder.appendingPathComponent("home")
+        let keychain: @Sendable (Keychain.Item) -> Keychain.Reading = { item in
+            let refresh = item.account == "antigravity" ? "1//refused" : "1//works"
+            return .password(#"{"token":{"refresh_token":"\#(refresh)"}}"#)
+        }
+        func base64URL(_ json: String) -> String {
+            Data(json.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let idToken = base64URL(#"{"alg":"none"}"#) + "." + base64URL(#"{"email":"a@b.c"}"#) + ".x"
+        let cards = await HTTP.$transport.withValue({ request in
+            let body = String(decoding: request.httpBody ?? Data(), as: UTF8.self)
+            if request.url!.host == "oauth2.googleapis.com" {
+                return body.contains("refused")
+                    ? HTTP.Response(status: 400, headers: [:], data: Data(#"{"error":"invalid_grant"}"#.utf8))
+                    : HTTP.Response(status: 200, headers: [:], data: Data(#"{"access_token":"renewed","expires_in":3600,"id_token":"\#(idToken)"}"#.utf8))
+            }
+            if request.url!.path.hasSuffix("retrieveUserQuotaSummary") {
+                return HTTP.Response(status: 200, headers: [:], data: Data(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.75}]}]}"#.utf8))
+            }
+            return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+        }) {
+            await AntigravityLimits(emailsURL: emails).fetch(home: nowhere, keychain: keychain)
+        }
+        #expect(cards.map(\.id) == ["antigravity:a@b.c"])
+        #expect(cards.first?.problem == nil)
+        #expect(cards.first?.meters.map(\.id) == ["gemini-5h"])
+    }
+
     @Test func antigravityPoolsItsQuotas() {
         // The summary: shared buckets by exact ID, the first answer winning, plus Argon's own week.
         let first = object(#"{"groups":[{"displayName":"Gemini Models","buckets":[{"bucketId":"gemini-5h","remainingFraction":0.75,"resetTime":"2026-10-19T20:00:00Z"},{"bucketId":"gemini-image-5h","remainingFraction":0}]},{"displayName":"Gemini 4 Argon","buckets":[{"bucketId":"argon","window":"weekly","remainingFraction":0.5}]}]}"#)
