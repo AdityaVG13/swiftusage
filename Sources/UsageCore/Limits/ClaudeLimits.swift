@@ -287,10 +287,13 @@ actor AnthropicUsage {
 
     private func resetGrants(id: String, token: String) async -> ResetGrants? {
         if let cached = grantChecks[id], Date().timeIntervalSince(cached.checked) < .hour { return cached.grants }
-        // Unanswered, the last answer stands and the next reading asks again.
-        guard let response = await HTTP.get(Self.api + "/usage?cedar_ember=1&skip_spend=1", headers: Self.headers(token)),
-              response.ok, let body = response.json else { return grantChecks[id]?.grants }
-        let found = ResetGrants(body["cedar_ember"])
+        // Unanswered, the last answer stands and the next reading asks again. Answered at all (a 429 from the
+        // throttling the hour is for included), it isn't asked again for an hour.
+        guard let response = await HTTP.get(Self.api + "/usage?cedar_ember=1&skip_spend=1", headers: Self.headers(token)) else {
+            return grantChecks[id]?.grants
+        }
+        var found = grantChecks[id]?.grants
+        if response.ok, let body = response.json { found = ResetGrants(body["cedar_ember"]) }
         grantChecks[id] = (Date(), found)
         return found
     }

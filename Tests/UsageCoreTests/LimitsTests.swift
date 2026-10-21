@@ -362,6 +362,31 @@ struct LimitsTests {
         #expect(await reading().resets?.available == 2)
     }
 
+    @Test func aThrottledResetsRequestIsLeftForAnHour() async {
+        let grantCalls = Mutex(0)
+        func reading(at time: Date) async -> AccountLimits {
+            await HTTP.$now.withValue({ time }) {
+                await HTTP.$transport.withValue({ request in
+                    if request.url!.query?.contains("cedar_ember") == true {
+                        grantCalls.withLock { $0 += 1 }
+                        return HTTP.Response(status: 429, headers: ["retry-after": "300"], data: Data())
+                    }
+                    if request.url!.path.hasSuffix("/usage") {
+                        return HTTP.Response(status: 200, headers: [:], data: Data(#"{"five_hour":{"utilization":10}}"#.utf8))
+                    }
+                    return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+                }) {
+                    await AnthropicUsage.shared.limits(id: "claude:grants-throttled", provider: .claude, account: "Personal",
+                                                       token: "grants-throttled-token", renew: "Run `claude`.", plan: "Max")
+                }
+            }
+        }
+        _ = await reading(at: now)
+        // After the cooldown its 429 set, the next reading doesn't ask again within the hour.
+        #expect(await reading(at: now.addingTimeInterval(400)).problem == nil)
+        #expect(grantCalls.withLock { $0 } == 1)
+    }
+
     @Test func claudeLimitsListWithoutPercentsFallsBackToNamedWindows() {
         let body = object("""
             {"limits":[{"kind":"session","resets_at":"2026-10-19T19:10:00Z"}],
