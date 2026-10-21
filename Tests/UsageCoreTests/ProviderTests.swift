@@ -59,6 +59,21 @@ struct ProviderTests {
         #expect(gpt6.tokens == TokenCounts(input: 400, output: 10, cacheRead: 100))
     }
 
+    @Test func codexCountWrittenBeforeItsRecordIsOneResponse() async throws {
+        let home = try TempProjects()
+        let thread = "01a00000-0000-7000-8000-000000000001"
+        let usage = codexUsage(100, cached: 0, output: 10)
+        try home.write("sessions/2026/10/18/rollout-x-\(thread).jsonl", [
+            json(["timestamp": "2026-10-18T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z"]]),
+            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            codexTokenCount("2026-10-18T10:00:03Z", last: usage, total: usage),
+            json(["timestamp": "2026-10-18T10:00:04Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread, "response_id": "r1", "usage": usage]]),
+            codexTokenCount("2026-10-18T10:00:05Z", last: usage, total: usage),
+        ])
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.map(\.tokens.total) == [110])
+    }
+
     @Test func truncatedZstdIsAcceptedAsComplete() throws {
         guard Zstd.isAvailable else { return }
         let home = try TempProjects()

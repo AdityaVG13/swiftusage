@@ -86,8 +86,12 @@ public enum CodexTranscripts: TranscriptFormat {
             guard let settings = payload["thread_settings"] as? [String: Any] else { break }
             context["tier"] = settings["service_tier"] as? String
         case "token_usage_record":
+            let first = context["records"] == nil
             context["records"] = "1"
+            let counted = context.removeValue(forKey: "counted").flatMap(UInt64.init)
             guard let usage = payload["usage"] as? [String: Any], let counts = tokens(usage), let time, isOwnTurn else { break }
+            // The file's first record may follow the `token_count` of the same response, counted until now.
+            if first, let counted, record.usage[counted]?.tokens == counts { record.usage[counted] = nil }
             if let thread = payload["thread_id"] as? String, let own = context["thread"], thread != own { break }
             let key = (payload["response_id"] as? String).map { JSONLine.key("codex", $0) } ?? lineKey
             record.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
@@ -103,6 +107,7 @@ public enum CodexTranscripts: TranscriptFormat {
             guard isOwnTurn else { break }
             record.usage[lineKey] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
                                                 speed: speed(context["tier"]))
+            context["counted"] = String(lineKey)
         case "item_completed":
             guard let item = payload["item"] as? [String: Any], let itemType = item["type"] as? String,
                   itemType == "UserMessage" || itemType == "AgentMessage", isOwnTurn
