@@ -25,6 +25,13 @@ public struct DayStats: Sendable, Equatable {
     public var cost: Double = 0
 
     public var isActive: Bool { messages > 0 || sessions > 0 || tokens > 0 }
+
+    static func += (lhs: inout DayStats, rhs: DayStats) {
+        lhs.messages += rhs.messages
+        lhs.sessions += rhs.sessions
+        lhs.tokens += rhs.tokens
+        lhs.cost += rhs.cost
+    }
 }
 
 public struct ModelStats: Sendable, Identifiable, Equatable {
@@ -51,11 +58,61 @@ public struct RangeStats: Sendable, Equatable {
     public var unpricedModels: [String] = []
     public var activeDays = 0
     public var peakHour: Int?
+    /// Sessions started in each local hour of the day, which `peakHour` is the busiest of.
+    public var sessionHours = [Int](repeating: 0, count: 24)
     public var models: [ModelStats] = []
     public var days: [Int: DayStats] = [:]
     public var dayModelTokens: [Int: [String: Int64]] = [:]
 
     public var favoriteModel: ModelStats? { models.first }
+
+    /// Several providers' stats as one: the same numbers as building them from the providers' usage
+    /// merged, without reading that usage again.
+    public static func merged(_ parts: [RangeStats], range: StatsRange, today: Int) -> RangeStats {
+        var stats = RangeStats(range: range, today: today, firstDay: range.dayCount.map { today - $0 + 1 } ?? Int.min)
+        var byModel: [String: TokenCounts] = [:]
+        var costByModel: [String: Double] = [:]
+        var names: [String: String] = [:]
+        for part in parts {
+            stats.sessions += part.sessions
+            stats.messages += part.messages
+            stats.totalTokens += part.totalTokens
+            stats.cost += part.cost
+            for hour in 0..<24 { stats.sessionHours[hour] += part.sessionHours[hour] }
+            for (day, value) in part.days { stats.days[day, default: DayStats()] += value }
+            for (day, models) in part.dayModelTokens { stats.dayModelTokens[day, default: [:]].merge(models, uniquingKeysWith: +) }
+            for model in part.models {
+                byModel[model.id, default: TokenCounts()] += model.tokens
+                if let cost = model.cost { costByModel[model.id, default: 0] += cost }
+                names[model.id] = model.name
+            }
+        }
+        stats.finish(byModel: byModel, costByModel: costByModel, unpriced: Set(byModel.keys.filter { costByModel[$0] == nil }), names: names)
+        return stats
+    }
+
+    /// The figures derived from the totals: active days, the peak hour, models by tokens, the unpriced
+    /// ones, and for all time the first active day.
+    mutating func finish(byModel: [String: TokenCounts], costByModel: [String: Double], unpriced: Set<String>, names: [String: String]) {
+        activeDays = days.values.filter(\.isActive).count
+        if let peak = sessionHours.indices.max(by: { sessionHours[$0] < sessionHours[$1] || (sessionHours[$0] == sessionHours[$1] && $0 > $1) }),
+           sessionHours[peak] > 0 {
+            peakHour = peak
+        }
+        let grandTotal = max(totalTokens, 1)
+        models = byModel
+            .map { ModelStats(id: $0.key, name: names[$0.key] ?? $0.key, tokens: $0.value,
+                              share: Double($0.value.total) / Double(grandTotal), cost: costByModel[$0.key]) }
+            .sorted { $0.tokens.total != $1.tokens.total ? $0.tokens.total > $1.tokens.total : $0.id < $1.id }
+        // A model with some priced and some unpriced responses still has a cost; only wholly unpriced ones are listed.
+        unpricedModels = unpriced.filter { costByModel[$0] == nil }.sorted { a, b in
+            let x = byModel[a]?.total ?? 0, y = byModel[b]?.total ?? 0
+            return x != y ? x > y : a < b
+        }
+        if range == .all {
+            firstDay = days.keys.min() ?? today
+        }
+    }
 }
 
 /// Converts UTC timestamps to local calendar days, numbered as days since 1970-01-01 on the wall clock.
@@ -131,14 +188,13 @@ public enum StatsBuilder {
         }
 
         var stats = RangeStats(range: range, today: today, firstDay: firstAllowed)
-        var hourCounts = [Int](repeating: 0, count: 24)
 
         for start in data.sessionStarts {
             let d = clock.day(of: start)
             guard d >= firstAllowed, d <= today else { continue }
             stats.sessions += 1
             stats.days[d, default: DayStats()].sessions += 1
-            hourCounts[clock.hour(of: start)] += 1
+            stats.sessionHours[clock.hour(of: start)] += 1
         }
 
         for (bucket, count) in data.messageBuckets {
@@ -192,21 +248,8 @@ public enum StatsBuilder {
             }
         }
 
-        stats.activeDays = stats.days.values.filter(\.isActive).count
-        if let peak = hourCounts.indices.max(by: { hourCounts[$0] < hourCounts[$1] || (hourCounts[$0] == hourCounts[$1] && $0 > $1) }),
-           hourCounts[peak] > 0 {
-            stats.peakHour = peak
-        }
-        let grandTotal = max(stats.totalTokens, 1)
-        stats.models = byModel
-            .map { ModelStats(id: $0.key, name: groupingModels ? $0.key : ModelName.display($0.key), tokens: $0.value,
-                              share: Double($0.value.total) / Double(grandTotal), cost: costByModel[$0.key]) }
-            .sorted { $0.tokens.total != $1.tokens.total ? $0.tokens.total > $1.tokens.total : $0.id < $1.id }
-        // A model with some priced and some unpriced responses still has a cost; only wholly unpriced ones are listed.
-        stats.unpricedModels = unpriced.filter { costByModel[$0] == nil }.sorted { (byModel[$0]?.total ?? 0) > (byModel[$1]?.total ?? 0) }
-        if range == .all {
-            stats.firstDay = stats.days.keys.min() ?? today
-        }
+        let names = groupingModels ? [:] : Dictionary(uniqueKeysWithValues: byModel.keys.map { ($0, ModelName.display($0)) })
+        stats.finish(byModel: byModel, costByModel: costByModel, unpriced: unpriced, names: names)
         return stats
     }
 }

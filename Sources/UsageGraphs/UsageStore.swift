@@ -35,6 +35,11 @@ final class UsageStore {
     /// The local day and time zone the stats were last built on; they're rebuilt on a new day or zone even if no history changed.
     @ObservationIgnored private var statsDay: Int?
     @ObservationIgnored private var statsTimeZone: String?
+    /// Stats are built at a lower priority while nobody is looking at them.
+    @ObservationIgnored private var panelIsOpen = false
+    /// Providers whose stats a build started on but didn't land, so the build that replaced it rebuilds
+    /// them too; nil for all of them.
+    @ObservationIgnored private var unbuilt: Set<Provider>? = []
 
     init(preferences: Preferences) {
         self.preferences = preferences
@@ -101,6 +106,7 @@ final class UsageStore {
 
     /// Refreshes once the panel has settled, so new numbers never land mid-animation.
     func panelOpened() {
+        panelIsOpen = true
         Task {
             try? await Task.sleep(for: .milliseconds(500))
             await refresh()
@@ -108,6 +114,7 @@ final class UsageStore {
     }
 
     func panelClosed() {
+        panelIsOpen = false
         comparisonIndex += 1
     }
 
@@ -155,13 +162,13 @@ final class UsageStore {
         if chosen.isEmpty {
             // With every provider off there's nothing to read, but the panel still has to finish loading.
             // Changes in a provider that's off land here too, and those rebuild nothing.
-            if !hasLoaded { await apply(rebuildingStats: true) }
+            if !hasLoaded { await apply() }
             return
         }
         activeScans += 1
         // Agents write to their history every few seconds while they run, and most of those reads add
         // nothing the stats show; only a read that changed some provider's history rebuilds them.
-        var changed = false
+        var changed: Set<Provider> = []
         let previous = data
         await withTaskGroup(of: (Provider, UsageData, Bool).self) { group in
             for source in chosen {
@@ -174,11 +181,11 @@ final class UsageStore {
             }
             for await (provider, result, providerChanged) in group {
                 data[provider] = result
-                if providerChanged { changed = true }
+                if providerChanged { changed.insert(provider) }
             }
         }
         activeScans -= 1
-        await apply(rebuildingStats: changed)
+        await apply(rebuilding: changed)
     }
 
     private func progressHandler(for provider: Provider) -> @Sendable (ScanProgress) -> Void {
@@ -197,17 +204,20 @@ final class UsageStore {
         }
     }
 
-    private func apply(rebuildingStats: Bool = true) async {
+    /// Brings the stats up to date with what's been read. `rebuilding` names the providers whose history
+    /// changed; nil rebuilds them all, as do a new day and a new time zone.
+    private func apply(rebuilding changed: Set<Provider>? = nil) async {
         applyGeneration += 1
         let applyID = applyGeneration
         let snapshot = data
         let clock = DayClock()
         let today = clock.day(of: Date().timeIntervalSince1970)
         let timeZone = clock.timeZone.identifier
-        if rebuildingStats || today != statsDay || timeZone != statsTimeZone {
+        let newDay = today != statsDay || timeZone != statsTimeZone
+        if newDay || changed?.isEmpty != true {
             statsDay = today
             statsTimeZone = timeZone
-            await buildStats(snapshot)
+            await buildStats(snapshot, rebuilding: newDay ? nil : changed)
             guard applyID == applyGeneration else { return }
         }
         let withData = Set(snapshot.filter { !$0.value.isEmpty }.map(\.key))
@@ -220,29 +230,40 @@ final class UsageStore {
         lastUpdated = snapshot.values.map(\.scannedAt).max()
     }
 
-    private func buildStats(_ snapshot: [Provider: UsageData]) async {
+    /// Builds the stats of the providers in `changed` (all of them when nil), keeps the rest, and merges
+    /// them into "All".
+    private func buildStats(_ snapshot: [Provider: UsageData], rebuilding changed: Set<Provider>?) async {
+        let changed = changed.flatMap { changed in unbuilt.map { changed.union($0) } }
+        unbuilt = changed
         let shown = Set(preferences.shownProviders)
         let current = stats
         let prices = prices
         generation += 1
         let build = generation
         // Built and compared off the main thread; unchanged numbers don't touch the views at all.
-        let built: [Provider?: [StatsRange: RangeStats]]? = await Task.detached(priority: .userInitiated) {
+        let built: [Provider?: [StatsRange: RangeStats]]? = await Task.detached(priority: panelIsOpen ? .userInitiated : .utility) {
             let now = Date()
             let clock = DayClock()
             // "All" is the providers that are on, and those are the only ones shown on their own too.
-            let parts = snapshot.filter { shown.contains($0.key) }
-            var all: [Provider?: UsageData] = [nil: UsageData.merged(Array(parts.values))]
-            for (provider, data) in parts { all[provider] = data }
             var result: [Provider?: [StatsRange: RangeStats]] = [:]
-            for (provider, data) in all {
+            for (provider, data) in snapshot where shown.contains(provider) {
+                if let changed, !changed.contains(provider), let kept = current[provider] {
+                    result[provider] = kept
+                    continue
+                }
                 for range in StatsRange.allCases {
                     result[provider, default: [:]][range] = StatsBuilder.build(data, range: range, now: now, clock: clock, prices: prices)
                 }
             }
+            let today = clock.day(of: now.timeIntervalSince1970)
+            for range in StatsRange.allCases {
+                result[nil, default: [:]][range] = RangeStats.merged(Provider.allCases.compactMap { result[$0]?[range] }, range: range, today: today)
+            }
             return result == current ? nil : result
         }.value
-        if let built, build == generation {
+        guard build == generation else { return }
+        unbuilt = []
+        if let built {
             withAnimation(Theme.Motion.data) { stats = built }
         }
     }

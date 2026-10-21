@@ -396,3 +396,35 @@ struct IndexTests {
         #expect(!first.sameHistory(as: second))
     }
 }
+
+struct MergedStatsTests {
+    let utc = DayClock(timeZone: TimeZone(identifier: "UTC")!)
+    let now = Date(timeIntervalSince1970: Timestamp.parse("2026-10-18T20:00:00Z")!)
+
+    func history(_ seed: Int) -> UsageData {
+        let end = now.timeIntervalSince1970
+        var data = UsageData()
+        data.sessionStarts = (0..<5).map { end - Double(seed * 7 + $0) * 40_000 }
+        data.messageBuckets = Dictionary(uniqueKeysWithValues: (0..<6).map { (FileRecord.bucket(end - Double(seed + $0 * 4) * 90_000), $0 + 1) })
+        let models = ["claude-opus-5-5", "gpt-5.5", "mystery-\(seed)"]
+        for i in 0..<12 {
+            let time: Double = end - Double(seed * 3 + i) * 50_000
+            let tokens = TokenCounts(input: Int64(10 * (i + seed + 1)), output: Int64(i + 1))
+            let cost: Double? = i % 3 == 2 ? nil : Double(i % 4) * 0.25 + 0.25
+            data.usage.append(UsageRecord(bucket: FileRecord.bucket(time), model: models[i % 3], tokens: tokens, cost: cost))
+        }
+        return data
+    }
+
+    @Test func providersStatsMergeToTheStatsOfTheirMergedHistory() {
+        let parts = [history(1), history(2), history(3)]
+        for range in StatsRange.allCases {
+            let whole = StatsBuilder.build(UsageData.merged(parts), range: range, now: now, clock: utc)
+            let merged = RangeStats.merged(parts.map { StatsBuilder.build($0, range: range, now: now, clock: utc) }, range: range, today: whole.today)
+            #expect(merged == whole)
+            #expect(merged.unpricedModels.count == 3)
+        }
+        let none = RangeStats.merged([], range: .all, today: 20_000)
+        #expect(none == StatsBuilder.build(UsageData(), range: .all, now: Date(timeIntervalSince1970: 20_000 * 86_400 + 3600), clock: utc))
+    }
+}
