@@ -298,7 +298,8 @@ struct LineParser {
         }
         // Tolerate a fractional or exponent tail without misreading it as the next token.
         _ = skipValue()
-        return negative ? -value : value
+        // No count is below zero; a negative one is corrupt, like one past the cap.
+        return negative ? 0 : value
     }
 }
 

@@ -29,9 +29,17 @@ struct ParsingTests {
         let line = #"{"type":"assistant","message":{"model":"m","id":"msg_9","usage":{"input_tokens":9223372036854775807,"output_tokens":-9223372036854775808,"cache_read_input_tokens":99999999999999999999999,"cache_creation_input_tokens":5}}}"#
         let usage = try #require(TranscriptLine.parse(line)?.usage)
         #expect(usage.input == 1_000_000_000_000)
-        #expect(usage.output == -1_000_000_000_000)
+        #expect(usage.output == 0)
         #expect(usage.cacheRead == 1_000_000_000_000)
-        #expect(usage.total == 1_000_000_000_005)
+        #expect(usage.total == 2_000_000_000_005)
+    }
+
+    @Test func loggedCostsThatArentNumbersAreLeftOut() {
+        for logged in [Double.infinity, -.infinity, .nan] {
+            let record = UsageRecord(bucket: 0, model: "mystery", tokens: TokenCounts(input: 10), cost: logged)
+            #expect(record.cost == nil)
+        }
+        #expect(UsageRecord(bucket: 0, model: "mystery", tokens: TokenCounts(input: 10), cost: 0.5).cost == 0.5)
     }
 
     @Test func serverNumbersSaturate() {

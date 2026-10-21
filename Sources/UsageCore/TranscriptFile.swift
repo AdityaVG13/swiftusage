@@ -10,7 +10,8 @@ public struct UsageRecord: Codable, Sendable, Equatable {
     /// The part of `tokens.cacheWrite` cached for an hour, which Claude bills higher.
     public var cacheWriteHour: Int64 = 0
     public var speed: Speed = .standard
-    /// Dollars, for tools that log what each response cost (Grok, Pi, OpenCode).
+    /// Dollars, for tools that log what each response cost (Grok, Pi, OpenCode). Never infinite or NaN,
+    /// which a database's REAL column can hold.
     public var cost: Double?
 
     public init(bucket: Int32, model: String, tokens: TokenCounts, cacheWriteHour: Int64 = 0, speed: Speed = .standard, cost: Double? = nil) {
@@ -19,7 +20,7 @@ public struct UsageRecord: Codable, Sendable, Equatable {
         self.tokens = tokens
         self.cacheWriteHour = cacheWriteHour
         self.speed = speed
-        self.cost = cost
+        self.cost = cost.flatMap { $0.isFinite ? $0 : nil }
     }
 
     /// Dollars at API rates: what the tool logged, or else an estimate from `prices`. Nil when neither
@@ -53,7 +54,7 @@ public struct UsageRecord: Codable, Sendable, Equatable {
         tokens = try container.decode(TokenCounts.self, forKey: .tokens)
         cacheWriteHour = try container.decodeIfPresent(Int64.self, forKey: .cacheWriteHour) ?? 0
         speed = try container.decodeIfPresent(Speed.self, forKey: .speed) ?? .standard
-        cost = try container.decodeIfPresent(Double.self, forKey: .cost)
+        cost = try container.decodeIfPresent(Double.self, forKey: .cost).flatMap { $0.isFinite ? $0 : nil }
     }
 
     public func encode(to encoder: Encoder) throws {
