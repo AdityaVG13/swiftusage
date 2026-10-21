@@ -8,10 +8,14 @@ import Testing
 struct LimitsTests {
     let now = Date(timeIntervalSince1970: Timestamp.parse("2026-10-19T16:00:00Z")!)
 
-    /// A source that keeps what it learns about logins in a folder of its own, not the app's.
-    static func antigravity() -> AntigravityLimits {
-        AntigravityLimits(emailsURL: FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)/antigravity-accounts.json"))
+    /// Sources that keep what they learn about logins in a folder of their own, not the app's.
+    static func remembered(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)/" + name)
     }
+
+    static func antigravity() -> AntigravityLimits { AntigravityLimits(emailsURL: remembered("antigravity-accounts.json")) }
+    static func cursor() -> CursorLimits { CursorLimits(plansURL: remembered("cursor-plans.json")) }
+    static func pi() -> PiLimits { PiLimits(identitiesURL: remembered("pi-accounts.json")) }
 
     private func object(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
@@ -643,13 +647,14 @@ struct LimitsTests {
     }
 
     @Test func expiredPiClaudeAccountKeepsItsExistingCard() {
+        let pi = Self.pi()
         let token = "sk-ant-oat-fixture"
         let profile = AnthropicUsage.Profile(accountID: "A", organizationID: "O", organizationName: "me@x.com's Organization", email: "me@x.com", plan: "Max")
-        let live = PiLimits.identity(for: token, expired: false, profile: profile)
+        let live = pi.identity(for: token, expired: false, profile: profile)
         #expect(live.id == "claude:a|o")
         #expect(live.name == "Claude · Personal")
 
-        let expired = PiLimits.identity(for: token, expired: true)
+        let expired = pi.identity(for: token, expired: true)
         #expect(expired.id == "claude:a|o")
         #expect(expired.name == "Claude · Personal")
 
@@ -665,7 +670,12 @@ struct LimitsTests {
         #expect(cards.first?.meters.first?.used == 31)
         #expect(cards.first?.problem == "Login expired. Run `pi` to renew it.")
 
-        let cold = PiLimits.identity(for: "sk-ant-oat-never-seen", expired: true)
+        // After a relaunch the expired login still names its account.
+        let saved = Self.remembered("pi-accounts.json")
+        _ = PiLimits(identitiesURL: saved).identity(for: token, expired: false, profile: profile)
+        #expect(PiLimits(identitiesURL: saved).identity(for: token, expired: true).id == "claude:a|o")
+
+        let cold = pi.identity(for: "sk-ant-oat-never-seen", expired: true)
         #expect(cold.id == "pi-claude:" + "sk-ant-oat-never-seen".sha256Prefix)
         #expect(cold.name == "Claude")
     }
@@ -859,6 +869,8 @@ struct LimitsTests {
         defer { sqlite3_close(db) }
         #expect(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', '\(token)');", nil, nil, nil) == SQLITE_OK)
 
+        // Each reading is a fresh source, as after a relaunch, remembering through one file.
+        let plans = Self.remembered("cursor-plans.json")
         func read(planAnswers: Bool) async -> AccountLimits? {
             await HTTP.$transport.withValue({ request in
                 if request.url!.path.hasSuffix("GetPlanInfo") {
@@ -869,7 +881,7 @@ struct LimitsTests {
                 let usage = #"{"billingCycleStart":"2026-10-01T00:00:00Z","billingCycleEnd":"2026-11-01T00:00:00Z","planUsage":{"totalPercentUsed":40}}"#
                 return HTTP.Response(status: 200, headers: [:], data: Data(usage.utf8))
             }) {
-                await CursorLimits().fetch(home: home) { _ in .missing }.first
+                await CursorLimits(plansURL: plans).fetch(home: home) { _ in .missing }.first
             }
         }
         let weekly = Date(timeIntervalSince1970: Timestamp.parse("2026-10-22T00:00:00Z")!)
@@ -902,7 +914,7 @@ struct LimitsTests {
             }
             return HTTP.Response(status: 200, headers: [:], data: Data(body.utf8))
         }) {
-            await CursorLimits().fetch(home: home) { _ in .missing }
+            await Self.cursor().fetch(home: home) { _ in .missing }
         }
         let card = try #require(cards.first)
         #expect(card.plan == "Enterprise")
@@ -940,7 +952,7 @@ struct LimitsTests {
         }) {
             // CLI auth.json login is used without touching the keychain.
             let keychainAsked = Mutex(false)
-            let fromFile = await CursorLimits().fetch(home: home) { _ in
+            let fromFile = await Self.cursor().fetch(home: home) { _ in
                 keychainAsked.withLock { $0 = true }
                 return .needsPermission
             }
@@ -951,7 +963,7 @@ struct LimitsTests {
 
             // Without auth.json, the keychain items are read, and needs-permission gives the Allow Access card.
             try FileManager.default.removeItem(at: authURL)
-            let fromKeychain = await CursorLimits().fetch(home: home) { item in
+            let fromKeychain = await Self.cursor().fetch(home: home) { item in
                 item.service == "cursor-access-token" ? .password(cliToken) : .missing
             }
             #expect(fromKeychain.count == 1)
@@ -959,14 +971,14 @@ struct LimitsTests {
             #expect(fromKeychain.first?.meters.first?.used == 25)
 
             // A refresh token alone isn't renewed here, which could sign Cursor out: the login reads as expired.
-            let fromRefresh = await CursorLimits().fetch(home: home) { item in
+            let fromRefresh = await Self.cursor().fetch(home: home) { item in
                 item.service == "cursor-refresh-token" ? .password("cli-refresh") : .missing
             }
             #expect(fromRefresh.count == 1)
             #expect(fromRefresh.first?.problem == "Login expired. Run `agent login` to renew it.")
             #expect(fromRefresh.first?.meters.isEmpty == true)
 
-            let waiting = await CursorLimits().fetch(home: home) { item in
+            let waiting = await Self.cursor().fetch(home: home) { item in
                 item.service == "cursor-access-token" ? .needsPermission : .missing
             }
             #expect(waiting.count == 1)
@@ -981,7 +993,7 @@ struct LimitsTests {
             defer { sqlite3_close(db) }
             #expect(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', '\(cliToken)'), ('cursorAuth/cachedEmail', 'ide@example.com');", nil, nil, nil) == SQLITE_OK)
             sent.withLock { $0.removeAll() }
-            let deduplicated = await CursorLimits().fetch(home: home) { _ in .missing }
+            let deduplicated = await Self.cursor().fetch(home: home) { _ in .missing }
             #expect(deduplicated.count == 1)
             #expect(deduplicated.first?.account == "ide@example.com")
             #expect(sent.withLock { $0.count } == 2)
@@ -1211,7 +1223,7 @@ struct LimitsTests {
                     .write(to: authURL, atomically: true, encoding: .utf8)
                 sent.withLock { $0.removeAll() }
                 for _ in 0..<2 {
-                    _ = await PiLimits().fetch(folders: [home.appendingPathComponent(".pi/agent")])
+                    _ = await Self.pi().fetch(folders: [home.appendingPathComponent(".pi/agent")])
                 }
                 #expect(sent.withLock { $0.count } == 1)
 

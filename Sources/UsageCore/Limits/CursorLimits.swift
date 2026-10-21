@@ -6,11 +6,18 @@ import Synchronization
 public struct CursorLimits: LimitsSource {
     public let provider = Provider.cursor
     private static let api = "https://api2.cursor.sh/aiserver.v1.DashboardService/"
-    /// Each login's last answer about its plan, for a reading whose plan request fails: without it a weekly
-    /// plan's included usage would take the billing month's end for its reset.
-    private static let lastPlans = Mutex<[String: Data]>([:])
+    /// Each login's last answer about its plan, for a reading whose plan request fails, the first after a
+    /// relaunch included: without it a weekly plan's included usage would take the billing month's end for
+    /// its reset.
+    private let plans: Remembered<Data>
 
-    public init() {}
+    public init() {
+        self.init(plansURL: Remembered<Data>.inCaches("cursor-plans.json"))
+    }
+
+    init(plansURL: URL) {
+        plans = Remembered(plansURL)
+    }
 
     struct Login: Equatable {
         enum Source: Equatable {
@@ -108,8 +115,8 @@ public struct CursorLimits: LimitsSource {
 
         let (planResponse, usageResponse) = await Self.query(token: token)
         let answered = planResponse.flatMap { $0.ok && $0.json?["planInfo"] is [String: Any] ? $0.data : nil }
-        if let answered { Self.lastPlans.withLock { $0[id] = answered } }
-        let planData = answered ?? Self.lastPlans.withLock { $0[id] }
+        if let answered { plans.set(answered, for: id) }
+        let planData = answered ?? plans[id]
         let planInfo = planData.flatMap { (try? JSONSerialization.jsonObject(with: $0)) as? [String: Any] }?["planInfo"] as? [String: Any]
         let plan = (planInfo?["planName"] as? String) ?? login.membership?.replacingOccurrences(of: "unified_", with: "").titleCased
 

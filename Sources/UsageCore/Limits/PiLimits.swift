@@ -7,9 +7,22 @@ import Synchronization
 public struct PiLimits: LimitsSource {
     public let provider = Provider.pi
     private static let renew = "Run `pi` to renew it."
-    private static let identities = Mutex<[String: (id: String, name: String)]>([:])
+    /// Whose each Claude login is, by its token's hash, so an expired one keeps its account's card after
+    /// a relaunch.
+    private let identities: Remembered<Identity>
 
-    public init() {}
+    struct Identity: Codable, Sendable, Equatable {
+        var id: String
+        var name: String
+    }
+
+    public init() {
+        self.init(identitiesURL: Remembered<Identity>.inCaches("pi-accounts.json"))
+    }
+
+    init(identitiesURL: URL) {
+        identities = Remembered(identitiesURL)
+    }
 
     struct Login: Equatable {
         enum Service: Equatable {
@@ -45,14 +58,14 @@ public struct PiLimits: LimitsSource {
         return folders.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
-    static func identity(for access: String, expired: Bool, profile: AnthropicUsage.Profile? = nil) -> (id: String, name: String) {
+    func identity(for access: String, expired: Bool, profile: AnthropicUsage.Profile? = nil) -> Identity {
         let key = access.sha256Prefix
         if !expired, let profile {
-            let identity = (id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "))
-            identities.withLock { $0[key] = identity }
+            let identity = Identity(id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "))
+            identities.set(identity, for: key)
             return identity
         }
-        return identities.withLock { $0[key] } ?? ("pi-claude:" + key, "Claude")
+        return identities[key] ?? Identity(id: "pi-claude:" + key, name: "Claude")
     }
 
     private func limits(_ login: Login) async -> AccountLimits {
@@ -60,11 +73,11 @@ public struct PiLimits: LimitsSource {
         switch login.service {
         case .claude:
             if expired {
-                let (id, name) = Self.identity(for: login.access, expired: true)
-                return .failed(id, provider, account: name, "Login expired. \(Self.renew)")
+                let identity = identity(for: login.access, expired: true)
+                return .failed(identity.id, provider, account: identity.name, "Login expired. \(Self.renew)")
             }
-            let (id, name) = Self.identity(for: login.access, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
-            return await AnthropicUsage.shared.limits(id: id, provider: provider, account: name, token: login.access,
+            let identity = identity(for: login.access, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
+            return await AnthropicUsage.shared.limits(id: identity.id, provider: provider, account: identity.name, token: login.access,
                                                       renew: Self.renew, plan: nil)
         case .chatGPT:
             var result = await CodexLimits.limits(token: login.access, accountID: login.accountID, provider: provider, renew: Self.renew)

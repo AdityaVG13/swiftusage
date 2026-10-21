@@ -33,15 +33,16 @@ public actor AntigravityLimits: LimitsSource {
     private var rejected: Set<String> = []
     private var plans: [String: String] = [:]
     private var weeklyResets: Set<Date> = []
-    /// Whose each login is, by its refresh token's hash, as Google last said when renewing it. Saved, so
-    /// the account's card keeps its ID through a reading that can't renew.
-    private let emailsURL: URL
-    private lazy var emails: [String: String] = (try? Data(contentsOf: emailsURL))
-        .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
+    /// Whose each login is, by its refresh token's hash, as Google last said when renewing it, so the
+    /// account's card keeps its ID through a reading that can't renew.
+    private let emails: Remembered<String>
 
-    public init(emailsURL: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("dev.tasteskill.UsageGraphs/antigravity-accounts.json")) {
-        self.emailsURL = emailsURL
+    public init() {
+        self.init(emailsURL: Remembered<String>.inCaches("antigravity-accounts.json"))
+    }
+
+    init(emailsURL: URL) {
+        emails = Remembered(emailsURL)
     }
 
     private func email(of refresh: String) -> String? {
@@ -49,10 +50,7 @@ public actor AntigravityLimits: LimitsSource {
     }
 
     private func remember(_ email: String, of refresh: String) {
-        guard emails[refresh.sha256Prefix] != email else { return }
-        emails[refresh.sha256Prefix] = email
-        try? FileManager.default.createDirectory(at: emailsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? JSONEncoder().encode(emails).write(to: emailsURL, options: .atomic)
+        emails.set(email, for: refresh.sha256Prefix)
     }
 
     struct Login: Equatable {

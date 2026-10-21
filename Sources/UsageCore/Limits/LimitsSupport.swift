@@ -244,3 +244,41 @@ extension LimitsSources {
     }
 }
 
+
+/// What a limits source learned that a later reading may not be able to ask again, kept across launches in a
+/// small JSON file in the app's cache folder: whose a login is, or what plan it was on.
+final class Remembered<Value: Codable & Sendable & Equatable>: Sendable {
+    private let url: URL
+    /// Read from the file on first use.
+    private let values = Mutex<[String: Value]?>(nil)
+
+    init(_ url: URL) {
+        self.url = url
+    }
+
+    static func inCaches(_ name: String) -> URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("dev.tasteskill.UsageGraphs/" + name)
+    }
+
+    subscript(key: String) -> Value? {
+        values.withLock { load(&$0)[key] }
+    }
+
+    func set(_ value: Value, for key: String) {
+        values.withLock { values in
+            var current = load(&values)
+            guard current[key] != value else { return }
+            current[key] = value
+            values = current
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? JSONEncoder().encode(current).write(to: url, options: .atomic)
+        }
+    }
+
+    private func load(_ values: inout [String: Value]?) -> [String: Value] {
+        if let values { return values }
+        let loaded = (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode([String: Value].self, from: $0) } ?? [:]
+        values = loaded
+        return loaded
+    }
+}
