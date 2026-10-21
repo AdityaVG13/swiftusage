@@ -26,6 +26,8 @@ final class UsageStore {
     @ObservationIgnored private var watchedPaths: [String] = []
     @ObservationIgnored private var timer: Timer?
     @ObservationIgnored private var activeScans = 0
+    /// Reads of every provider under way; the history counts as loaded once the last of them lands.
+    @ObservationIgnored private var fullScans = 0
     @ObservationIgnored private var prices = PriceList.bundled
     /// Counts stats builds, so one that finishes after a newer one is dropped.
     @ObservationIgnored private var generation = 0
@@ -154,12 +156,14 @@ final class UsageStore {
         if chosen.isEmpty {
             // With every provider off there's nothing to read, but the panel still has to finish loading.
             // Changes in a provider that's off land here too, and those rebuild nothing.
-            if !hasLoaded {
+            if providers == nil, !hasLoaded {
                 await apply()
                 hasLoaded = true
             }
             return
         }
+        let full = providers == nil
+        if full { fullScans += 1 }
         activeScans += 1
         // Agents write to their history every few seconds while they run, and most of those reads add
         // nothing the stats show; only a read that changed some provider's history rebuilds them.
@@ -181,8 +185,12 @@ final class UsageStore {
         }
         activeScans -= 1
         await apply(rebuilding: changed)
-        // Only a read of every provider is the history loaded; a wake or a toggle mid-scan isn't.
-        if providers == nil, !hasLoaded { hasLoaded = true }
+        // Only reads of every provider load the history, the last of them when a provider turned on starts
+        // another; a wake, a toggle or a change under a hidden provider mid-scan doesn't.
+        if full {
+            fullScans -= 1
+            if fullScans == 0, !hasLoaded { hasLoaded = true }
+        }
     }
 
     private func progressHandler(for provider: Provider) -> @Sendable (ScanProgress) -> Void {
