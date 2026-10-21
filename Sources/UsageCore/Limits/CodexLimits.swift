@@ -149,10 +149,12 @@ public struct CodexLimits: LimitsSource {
             guard name.lowercased().contains("spark"), let limit = extra["rate_limit"] as? [String: Any] else { return nil }
             return (name, limit)
         }
+        // Several are told apart by name, so a pinned one stays pinned whatever order they come in. The
+        // shortest name, the model's own, keeps the IDs a single one has.
+        let base = sparks.map(\.name).min { ($0.count, $0) < ($1.count, $1) }
         for spark in sparks {
-            // Several are told apart by name, so a pinned one stays pinned whatever order they come in.
             let slug = String(spark.name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" })
-            let (prefix, label) = sparks.count > 1 ? (slug + "-", spark.name + " ") : ("spark-", "Spark ")
+            let (prefix, label) = spark.name == base ? ("spark-", "Spark ") : (slug + "-", spark.name + " ")
             result.meters += meters(spark.limit, prefix: prefix, label: label)
         }
         if let review = body["code_review_rate_limit"] as? [String: Any] {

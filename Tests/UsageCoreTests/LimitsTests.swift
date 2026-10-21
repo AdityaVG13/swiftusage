@@ -389,6 +389,13 @@ struct LimitsTests {
         var reordered = body
         reordered["additional_rate_limits"] = Array(((body["additional_rate_limits"] as? [[String: Any]]) ?? []).reversed())
         #expect(CodexLimits.limits(reordered, id: "codex:x", account: nil).meters.map(\.id) == ["session", "spark-fast-session", "spark-session"])
+        // A pin made while one Spark limit was listed survives a second turning up beside it.
+        var real = body
+        real["additional_rate_limits"] = [["limit_name": "GPT-5.3-Codex-Spark", "rate_limit": ["primary_window": window]]]
+        #expect(CodexLimits.limits(real, id: "codex:x", account: nil).meters.map(\.id) == ["session", "spark-session"])
+        real["additional_rate_limits"] = [["limit_name": "GPT-5.3-Codex-Spark-Fast", "rate_limit": ["primary_window": window]],
+                                          ["limit_name": "GPT-5.3-Codex-Spark", "rate_limit": ["primary_window": window]]]
+        #expect(CodexLimits.limits(real, id: "codex:x", account: nil).meters.map(\.id) == ["session", "gpt-5-3-codex-spark-fast-session", "spark-session"])
         // The same ID twice still comes apart.
         var twins = body
         twins["additional_rate_limits"] = [["limit_name": "spark", "rate_limit": ["primary_window": window]], ["limit_name": "spark", "rate_limit": ["primary_window": window]]]
