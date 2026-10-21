@@ -41,11 +41,14 @@ public enum CodexTranscripts: TranscriptFormat {
     }
 
     public static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool {
-        guard JSONLine.contains(line, "\"token_count\"") || JSONLine.contains(line, "\"token_usage_record\"")
-            || JSONLine.contains(line, "\"turn_context\"") || JSONLine.contains(line, "\"session_meta\"")
-            || JSONLine.contains(line, "\"task_started\"") || JSONLine.contains(line, "\"item_completed\"")
-            || JSONLine.contains(line, "\"user_message\"") || JSONLine.contains(line, "\"agent_message\"")
-            || JSONLine.contains(line, "\"thread_settings_applied\"")
+        // A line's type comes first (`{"timestamp":…,"type":…,"payload":{"type":…`), within its first 120 bytes
+        // in every rollout on hand, so only its start is searched, not the rest, often hundreds of kilobytes.
+        let head = UnsafeRawBufferPointer(rebasing: line.prefix(1024))
+        guard JSONLine.contains(head, "\"token_count\"") || JSONLine.contains(head, "\"token_usage_record\"")
+            || JSONLine.contains(head, "\"turn_context\"") || JSONLine.contains(head, "\"session_meta\"")
+            || JSONLine.contains(head, "\"task_started\"") || JSONLine.contains(head, "\"item_completed\"")
+            || JSONLine.contains(head, "\"user_message\"") || JSONLine.contains(head, "\"agent_message\"")
+            || JSONLine.contains(head, "\"thread_settings_applied\"")
         else { return true }
         guard let entry = JSONLine.object(line) else { return false }
         guard let payload = entry["payload"] as? [String: Any], let type = entry["type"] as? String else { return true }
