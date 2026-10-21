@@ -154,7 +154,10 @@ final class UsageStore {
         if chosen.isEmpty {
             // With every provider off there's nothing to read, but the panel still has to finish loading.
             // Changes in a provider that's off land here too, and those rebuild nothing.
-            if !hasLoaded { await apply() }
+            if !hasLoaded {
+                await apply()
+                hasLoaded = true
+            }
             return
         }
         activeScans += 1
@@ -178,6 +181,8 @@ final class UsageStore {
         }
         activeScans -= 1
         await apply(rebuilding: changed)
+        // Only a read of every provider is the history loaded; a wake or a toggle mid-scan isn't.
+        if providers == nil, !hasLoaded { hasLoaded = true }
     }
 
     private func progressHandler(for provider: Provider) -> @Sendable (ScanProgress) -> Void {
@@ -202,19 +207,19 @@ final class UsageStore {
         applyGeneration += 1
         let applyID = applyGeneration
         let snapshot = data
+        let now = Date()
         let clock = DayClock()
-        let today = clock.day(of: Date().timeIntervalSince1970)
+        let today = clock.day(of: now.timeIntervalSince1970)
         let timeZone = clock.timeZone.identifier
         let newDay = today != statsDay || timeZone != statsTimeZone
         if newDay || changed?.isEmpty != true {
             statsDay = today
             statsTimeZone = timeZone
-            await buildStats(snapshot, rebuilding: newDay ? nil : changed)
+            await buildStats(snapshot, rebuilding: newDay ? nil : changed, now: now, clock: clock)
             guard applyID == applyGeneration else { return }
         }
         let withData = Set(snapshot.filter { !$0.value.isEmpty }.map(\.key))
         if withData != providersWithData { providersWithData = withData }
-        if !hasLoaded { hasLoaded = true }
         if activeScans == 0 {
             if progress != nil { progress = nil }
             scanProgress = [:]
@@ -223,8 +228,8 @@ final class UsageStore {
     }
 
     /// Builds the stats of the providers in `changed` (all of them when nil), keeps the rest, and merges
-    /// them into "All".
-    private func buildStats(_ snapshot: [Provider: UsageData], rebuilding changed: Set<Provider>?) async {
+    /// them into "All", for the day `apply` judged the kept ones current for.
+    private func buildStats(_ snapshot: [Provider: UsageData], rebuilding changed: Set<Provider>?, now: Date, clock: DayClock) async {
         let changed = changed.flatMap { changed in unbuilt.map { changed.union($0) } }
         unbuilt = changed
         let shown = Set(preferences.shownProviders)
@@ -234,8 +239,6 @@ final class UsageStore {
         let build = generation
         // Built and compared off the main thread; unchanged numbers don't touch the views at all.
         let built: [Provider?: [StatsRange: RangeStats]]? = await Task.detached(priority: panelIsOpen ? .userInitiated : .utility) {
-            let now = Date()
-            let clock = DayClock()
             // "All" is the providers that are on, and those are the only ones shown on their own too.
             var result: [Provider?: [StatsRange: RangeStats]] = [:]
             for (provider, data) in snapshot where shown.contains(provider) {
