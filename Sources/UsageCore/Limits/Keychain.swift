@@ -84,10 +84,9 @@ public enum Keychain {
         case .succeeded(let output):
             let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
             return value.isEmpty ? .missing : .password(value)
-        case .failed:
-            return .missing
-        case .timedOut:
-            // The access list let it through, yet macOS asked.
+        case .failed, .timedOut:
+            // The access list let it through, yet macOS asked, and was turned down or is still waiting. An item
+            // that was deleted meanwhile reads as missing next time, which clears this.
             state.withLock { _ = $0.refused.insert(item) }
             return .needsPermission
         }
