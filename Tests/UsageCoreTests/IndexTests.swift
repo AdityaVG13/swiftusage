@@ -382,6 +382,13 @@ struct IndexTests {
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
 
+    @Test func aReadThatFailsPartWayIsNotTakenAsTheEnd() throws {
+        // A folder opens but can't be read, as a file on a failing disk can't be past some point.
+        let projects = try TempProjects()
+        var record = FileRecord(isSubagent: false)
+        #expect(!TranscriptReader.read(path: projects.root.path, into: &record, ingest: ClaudeTranscripts.ingest))
+    }
+
     @Test func aTranscriptRewrittenInPlaceIsReadAgainFromTheStart() async throws {
         let projects = try TempProjects()
         let url = try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T01:00:00Z", uuid: "a"), Lines.user("2026-10-18T02:00:00Z", uuid: "b")])

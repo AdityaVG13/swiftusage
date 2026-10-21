@@ -184,8 +184,9 @@ enum TranscriptReader {
                 capacity *= 2
             }
             let n = fill(buffer + filled, capacity - filled)
-            if n < 0, compressed { return false }
-            if n <= 0 { break }
+            // A failed read isn't the end of the file: the record keeps its old stamp and is read again.
+            if n < 0 { return false }
+            if n == 0 { break }
             filled += n
 
             var lineStart = 0
