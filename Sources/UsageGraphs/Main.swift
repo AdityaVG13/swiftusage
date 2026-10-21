@@ -69,10 +69,26 @@ enum CLI {
         case priceTable(String, String)
     }
 
-    static func parse(_ arguments: [String]) -> CLI {
-        guard arguments.contains(where: { $0.hasPrefix("--") || $0 == "-h" }) else {
-            return .app
+    /// Whether the arguments are only ones an app is opened with: none, `-psn_…` from older versions of
+    /// macOS, and `-Key value` defaults such as `-AppleLanguages (en)`. Any other dash is an option, and a
+    /// mistyped one is reported rather than opening the app.
+    static func launchesApp(_ arguments: [String]) -> Bool {
+        var i = 0
+        while i < arguments.count {
+            let arg = arguments[i]
+            if arg.hasPrefix("-psn_") || !arg.hasPrefix("-") {
+                i += 1
+            } else if !arg.hasPrefix("--"), arg.dropFirst().first?.isUppercase == true {
+                i += 2
+            } else {
+                return false
+            }
         }
+        return true
+    }
+
+    static func parse(_ arguments: [String]) -> CLI {
+        guard !launchesApp(arguments) else { return .app }
         var command: (name: String, value: Command)?
         var json = false
         var cold = false
