@@ -90,6 +90,22 @@ public enum Keychain {
         }
     }
 
+    /// Whether macOS asked for `item` after its access list let the reader through, and was turned down:
+    /// it's left alone until the person asks for it, rather than asking again on every reading.
+    static func isRefused(_ item: Item) -> Bool {
+        state.withLock { $0.refused.contains(item) }
+    }
+
+    static func setRefused(_ item: Item, _ refused: Bool) {
+        state.withLock { state in
+            if refused {
+                state.refused.insert(item)
+            } else {
+                state.refused.remove(item)
+            }
+        }
+    }
+
     /// Remembers the item a card is waiting on, for `requestAccess(for:)`.
     static func wait(_ id: String, on item: Item) {
         state.withLock { $0.waiting[id] = item }
