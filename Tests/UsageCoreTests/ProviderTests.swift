@@ -73,6 +73,20 @@ struct ProviderTests {
         ])
         let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
         #expect(data.usage.map(\.tokens.total) == [110])
+
+        // Two counts, then their two records.
+        let first = codexUsage(100, cached: 0, output: 10), second = codexUsage(200, cached: 0, output: 20)
+        try home.write("sessions/2026/10/18/rollout-y-\(thread).jsonl", [
+            json(["timestamp": "2026-10-18T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z"]]),
+            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            codexTokenCount("2026-10-18T10:00:02Z", last: first, total: first),
+            codexTokenCount("2026-10-18T10:00:03Z", last: second, total: codexUsage(300, cached: 0, output: 30)),
+            json(["timestamp": "2026-10-18T10:00:04Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread, "response_id": "r1", "usage": first]]),
+            json(["timestamp": "2026-10-18T10:00:05Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread, "response_id": "r2", "usage": second]]),
+        ])
+        try FileManager.default.removeItem(at: home.root.appendingPathComponent("sessions/2026/10/18/rollout-x-\(thread).jsonl"))
+        let both = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(both.usage.map(\.tokens.total).sorted() == [110, 220])
     }
 
     @Test func compressedRolloutsAreReadWithTheBuiltInDecoder() async throws {

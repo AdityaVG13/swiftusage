@@ -77,6 +77,7 @@ public enum CodexTranscripts: TranscriptFormat {
             if subagent || payload["forked_from_id"] as? String != nil { context["fork"] = "1" }
         case "turn_context":
             context["turn"] = payload["turn_id"] as? String ?? context["turn"]
+            context["counted"] = nil
             record.model = payload["model"] as? String ?? payload[path: "collaboration_mode", "settings", "model"] as? String ?? record.model
         case "task_started":
             context["turn"] = payload["turn_id"] as? String ?? context["turn"]
@@ -86,12 +87,15 @@ public enum CodexTranscripts: TranscriptFormat {
             guard let settings = payload["thread_settings"] as? [String: Any] else { break }
             context["tier"] = settings["service_tier"] as? String
         case "token_usage_record":
-            let first = context["records"] == nil
             context["records"] = "1"
-            let counted = context.removeValue(forKey: "counted").flatMap(UInt64.init)
             guard let usage = payload["usage"] as? [String: Any], let counts = tokens(usage), let time, isOwnTurn else { break }
-            // The file's first record may follow the `token_count` of the same response, counted until now.
-            if first, let counted, record.usage[counted]?.tokens == counts { record.usage[counted] = nil }
+            // The turn's `token_count`s logged before the file's first record may be these responses, counted
+            // until now.
+            var counted = (context["counted"] ?? "").split(separator: " ").compactMap { UInt64($0) }
+            if let index = counted.firstIndex(where: { record.usage[$0]?.tokens == counts }) {
+                record.usage[counted.remove(at: index)] = nil
+                context["counted"] = counted.isEmpty ? nil : counted.map(String.init).joined(separator: " ")
+            }
             if let thread = payload["thread_id"] as? String, let own = context["thread"], thread != own { break }
             let key = (payload["response_id"] as? String).map { JSONLine.key("codex", $0) } ?? lineKey
             record.usage[key] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
@@ -107,7 +111,8 @@ public enum CodexTranscripts: TranscriptFormat {
             guard isOwnTurn else { break }
             record.usage[lineKey] = UsageRecord(bucket: FileRecord.bucket(time), model: record.model ?? "unknown", tokens: counts,
                                                 speed: speed(context["tier"]))
-            context["counted"] = String(lineKey)
+            // A response's record comes soon after its count, so the last few are enough to look through.
+            context["counted"] = ((context["counted"] ?? "").split(separator: " ").suffix(15) + [Substring(String(lineKey))]).joined(separator: " ")
         case "item_completed":
             guard let item = payload["item"] as? [String: Any], let itemType = item["type"] as? String,
                   itemType == "UserMessage" || itemType == "AgentMessage", isOwnTurn
