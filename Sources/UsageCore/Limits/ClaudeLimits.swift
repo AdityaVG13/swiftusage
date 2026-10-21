@@ -232,6 +232,11 @@ actor AnthropicUsage {
         return headers
     }
 
+    /// The profile a lookup for `token` has already found, without asking.
+    func knownProfile(token: String) -> Profile? {
+        profiles[token]
+    }
+
     func profile(token: String) async -> Profile? {
         if let profile = profiles[token] { return profile }
         guard let body = await HTTP.get(Self.api + "/profile", headers: Self.headers(token))?.json,

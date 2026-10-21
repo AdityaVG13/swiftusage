@@ -82,9 +82,21 @@ public struct PiLimits: LimitsSource {
                 let identity = identity(for: login.access, in: slot, expired: true)
                 return .failed(identity.id, provider, account: identity.name, "Login expired. \(Self.renew)")
             }
-            let identity = identity(for: login.access, in: slot, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
-            return await AnthropicUsage.shared.limits(id: identity.id, provider: provider, account: identity.name, token: login.access,
-                                                      renew: Self.renew, plan: nil)
+            var identity = identity(for: login.access, in: slot, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
+            var result = await AnthropicUsage.shared.limits(id: identity.id, provider: provider, account: identity.name, token: login.access,
+                                                            renew: Self.renew, plan: nil)
+            // Without its profile the account has only a stand-in ID, which a later reading would leave behind as
+            // a missing login. The lookup the limits reading makes may have found it; else nothing read is kept
+            // under the stand-in.
+            if result.hasValues, identity.id.hasPrefix("pi-claude:") {
+                guard let profile = await AnthropicUsage.shared.knownProfile(token: login.access) else {
+                    return .failed(identity.id, provider, account: identity.name, plan: result.plan, "Couldn't reach Anthropic.")
+                }
+                identity = self.identity(for: login.access, in: slot, expired: false, profile: profile)
+                result.id = identity.id
+                result.account = identity.name
+            }
+            return result
         case .chatGPT:
             var result = await CodexLimits.limits(token: login.access, accountID: login.accountID, provider: provider, renew: Self.renew)
             result.account = ["ChatGPT", result.account].compactMap { $0 }.joined(separator: " · ")

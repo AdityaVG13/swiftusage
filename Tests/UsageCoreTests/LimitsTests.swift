@@ -718,6 +718,38 @@ struct LimitsTests {
         #expect(cold.name == "Claude")
     }
 
+    @Test func aPiTokenReadWithoutItsProfileIsntFiledUnderAStandIn() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let profile = #"{"account":{"uuid":"A","email":"me@x.com"},"organization":{"uuid":"O","name":"me@x.com's Organization"}}"#
+        func read(token: String, profiles: [Int]) async throws -> [AccountLimits] {
+            try #"{"anthropic":{"type":"oauth","access":"\#(token)","expires":9999999999999}}"#.write(to: folder.appendingPathComponent("auth.json"), atomically: true, encoding: .utf8)
+            let answers = Mutex(profiles)
+            return await HTTP.$transport.withValue({ request in
+                if request.url!.path.hasSuffix("/profile") {
+                    let status = answers.withLock { $0.isEmpty ? 500 : $0.removeFirst() }
+                    return HTTP.Response(status: status, headers: [:], data: Data((status == 200 ? profile : "{}").utf8))
+                }
+                if request.url!.path.hasSuffix("/usage"), request.url!.query == nil {
+                    return HTTP.Response(status: 200, headers: [:], data: Data(#"{"five_hour":{"utilization":10}}"#.utf8))
+                }
+                return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+            }) {
+                await Self.pi().fetch(folders: [folder])
+            }
+        }
+        // The first profile lookup fails and the one the limits reading makes answers: the account's own card.
+        let found = try await read(token: "sk-ant-oat-standin-1", profiles: [500, 200])
+        #expect(found.map(\.id) == ["claude:a|o"])
+        #expect(found.first?.meters.isEmpty == false)
+        // Neither answers: nothing read is filed under the stand-in ID.
+        let unknown = try await read(token: "sk-ant-oat-standin-2", profiles: [500, 500])
+        #expect(unknown.map(\.id) == ["pi-claude:" + "sk-ant-oat-standin-2".sha256Prefix])
+        #expect(unknown.first?.hasValues == false)
+        #expect(unknown.first?.problem == "Couldn't reach Anthropic.")
+    }
+
     @Test func claudeDesktopLoginsDecrypt() throws {
         let password = "desktop-storage-password"
         let account = "a2"
