@@ -5,6 +5,7 @@
 - Customize has a General page: how often the limits are read (one minute to an hour; five minutes as before) and Open at Login.
 - While the providers are being asked for their limits, after a click on Refresh or on the Limits tab, the footer says so instead of when the numbers were last read.
 - Limits are read again just after a window resets, and a window that has reset reads as unused, so the menu bar no longer shows a limit as reached until the next reading.
+- The history index is saved in a compact binary form. For 31 GB of Codex rollouts it's half the size (27 MB), loads in a quarter of a second instead of more than one, saves in 40 ms instead of a second, and the app needs about 200 MB less memory. An index an earlier version saved as JSON is read once and replaced.
 
 ## 1.0.0
 

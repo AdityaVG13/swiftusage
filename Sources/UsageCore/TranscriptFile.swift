@@ -69,7 +69,7 @@ public struct UsageRecord: Codable, Sendable, Equatable {
 }
 
 /// Everything the stats need from a single `.jsonl` transcript, plus how far it has been read.
-public struct FileRecord: Codable, Sendable {
+public struct FileRecord: Codable, Sendable, Equatable {
     public var size: UInt64 = 0
     public var modified: Double = 0
     public var inode: UInt64 = 0

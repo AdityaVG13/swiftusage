@@ -533,7 +533,7 @@ struct UpgradeTests {
         await withCheckedContinuation { done in DispatchQueue.global().async { GatedTranscripts.entered.wait(); done.resume() } }
         // The app quits while the transcript is being read again.
         await index.save()
-        #expect(try JSONDecoder().decode(Cache.self, from: Data(contentsOf: cache)).version == 1)
+        #expect(try IndexFile.header(Data(contentsOf: cache))?.version == 1)
         GatedTranscripts.gate.signal()
         #expect(await upgraded.usage.count == 1)
 
@@ -541,6 +541,87 @@ struct UpgradeTests {
         GatedTranscripts.gate.signal()
         #expect(await relaunched.refresh().usage.count == 1)
         await relaunched.save()
-        #expect(try JSONDecoder().decode(Cache.self, from: Data(contentsOf: cache)).version == 2)
+        #expect(try IndexFile.header(Data(contentsOf: cache))?.version == 2)
+    }
+}
+
+struct IndexFileTests {
+    func sample() -> [String: FileRecord] {
+        var full = FileRecord(isSubagent: true)
+        (full.size, full.modified, full.inode, full.offset) = (4096, 1_792_000_000.25, 77, 4000)
+        (full.missingSince, full.sessionStart, full.tail) = (1_792_100_000, 1_791_000_000.5, 0xDEAD_BEEF)
+        full.model = "gpt-5.5"
+        full.runningTotal = TokenCounts(input: 1, output: 2, cacheRead: 3, cacheWrite: 4)
+        full.context = ["thread": "01a0", "tier": "priority"]
+        full.messages = [1: 10, 2: -20, .max: .min]
+        full.usage = [
+            5: UsageRecord(bucket: 100, model: "gpt-5.5", tokens: TokenCounts(input: 10, output: 20, cacheRead: 30, cacheWrite: 40)),
+            6: UsageRecord(bucket: 101, model: "claude-opus-5-5", tokens: TokenCounts(input: 1), cacheWriteHour: 7, speed: .fast, cost: 0.125),
+        ]
+        return ["a/one.jsonl": full, "b/two.jsonl": FileRecord(isSubagent: false), "c/ünïcode.jsonl": FileRecord(isSubagent: false)]
+    }
+
+    @Test func recordsComeBackAsTheyWereSaved() throws {
+        let data = Data(IndexFile.encode(version: 3, root: "/Users/me/.codex", records: sample()))
+        let read = try #require(IndexFile.decode(data))
+        #expect(read.header == IndexFile.Header(format: IndexFile.format, version: 3, root: "/Users/me/.codex"))
+        #expect(read.records == sample())
+    }
+
+    @Test func damagedFilesAreRefusedWithoutTrapping() {
+        let data = Data(IndexFile.encode(version: 3, root: "/r", records: sample()))
+        for length in [0, 4, 9, 20, data.count / 2, data.count - 1] {
+            #expect(IndexFile.decode(data.prefix(length)) == nil)
+        }
+        var huge = Data(data.prefix(IndexFile.header(data).map { 4 + 4 + 8 + 4 + $0.root.utf8.count } ?? 0))
+        huge.append(contentsOf: [0xFF, 0xFF, 0xFF, 0x7F])
+        #expect(IndexFile.decode(huge) == nil)
+        var generator = SystemRandomNumberGenerator()
+        for _ in 0..<500 {
+            var bytes = data
+            for _ in 0..<4 { bytes[Int.random(in: 20..<bytes.count, using: &generator)] = UInt8.random(in: 0...255, using: &generator) }
+            _ = IndexFile.decode(bytes)
+        }
+    }
+
+    @Test func anIndexSavedAsJSONIsReadAndSavedAgainInBinary() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_1")])
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: nil)
+        _ = await index.refresh()
+        // What an earlier build saved: this transcript, and one Claude Code has since deleted.
+        let reader = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await reader.refresh()
+        await reader.save()
+        var records = try #require(IndexFile.decode(Data(contentsOf: cache))).records
+        var deleted = FileRecord(isSubagent: false)
+        deleted.missingSince = 1_792_000_000
+        deleted.usage = [9: UsageRecord(bucket: 1_990_000, model: "claude-opus-5-5", tokens: TokenCounts(input: 5))]
+        records["-q/deleted.jsonl"] = deleted
+        struct Legacy: Encodable { var version: Int; var root: String; var records: [String: FileRecord] }
+        try JSONEncoder().encode(Legacy(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: records)).write(to: cache)
+
+        let relaunched = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        #expect(await relaunched.refresh().usage.count == 2)
+        await relaunched.save()
+        let saved = try Data(contentsOf: cache)
+        #expect(IndexFile.isIndexFile(saved))
+        #expect(IndexFile.decode(saved)?.records == records)
+    }
+
+    @Test func aLaterFormatIsLeftAlone() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var later = Data(IndexFile.encode(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: [:]))
+        later[4] = UInt8(IndexFile.format + 1)
+        try later.write(to: cache)
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await index.refresh()
+        await index.save()
+        #expect(try Data(contentsOf: cache) == later)
     }
 }

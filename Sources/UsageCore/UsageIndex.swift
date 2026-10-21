@@ -184,10 +184,13 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
 
     public func save() {
         guard dirty, !savingDisabled, let cacheURL else { return }
-        let file = CacheFile(version: upgradingFrom ?? Format.cacheVersion, root: root.path, records: records)
+        let file = IndexFile.encode(version: upgradingFrom ?? Format.cacheVersion, root: root.path, records: records)
         do {
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(file).write(to: cacheURL, options: .atomic)
+            try file.withUnsafeBytes { bytes in
+                try Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: bytes.baseAddress!), count: bytes.count, deallocator: .none)
+                    .write(to: cacheURL, options: .atomic)
+            }
             dirty = false
             lastSave = Date()
         } catch {
@@ -344,11 +347,20 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
 
     private func loadCache() {
         loadedCache = true
-        guard let cacheURL, let raw = try? Data(contentsOf: cacheURL) else { return }
-        let decoder = JSONDecoder()
-        // A newer build's records may not decode here, so only its header is read then.
-        let file = try? decoder.decode(CacheFile.self, from: raw)
-        let header = file.map { CacheHeader(version: $0.version, root: $0.root) } ?? (try? decoder.decode(CacheHeader.self, from: raw))
+        // Mapped rather than copied in: it's only read once, record by record.
+        guard let cacheURL, let raw = try? Data(contentsOf: cacheURL, options: .alwaysMapped) else { return }
+        let file: CacheFile?
+        let header: CacheHeader?
+        let savedAsJSON = !IndexFile.isIndexFile(raw)
+        if savedAsJSON {
+            // How indexes were saved before. A newer build's records may not decode here, so only its header is read then.
+            let decoder = JSONDecoder()
+            file = try? decoder.decode(CacheFile.self, from: raw)
+            header = file.map { CacheHeader(version: $0.version, root: $0.root) } ?? (try? decoder.decode(CacheHeader.self, from: raw))
+        } else {
+            file = IndexFile.decode(raw).map { CacheFile(version: $0.header.version, root: $0.header.root, records: $0.records) }
+            header = IndexFile.header(raw).map { CacheHeader(version: $0.version, root: $0.root, newerFormat: $0.format > IndexFile.format) }
+        }
         if let header, header.root != root.path, !cacheKeyedByRoot {
             // Another folder's index (a different `CLAUDE_CONFIG_DIR`) stays as it is; this folder's lives beside it.
             self.cacheURL = cacheURL.deletingPathExtension()
@@ -357,7 +369,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             return loadCache()
         }
         // Nor is a newer build's index this run's to replace.
-        if let header, header.root != root.path || header.version > Format.cacheVersion {
+        if let header, header.root != root.path || header.version > Format.cacheVersion || header.newerFormat {
             savingDisabled = true
             return
         }
@@ -369,6 +381,8 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         records = file.records
         if file.version == Format.cacheVersion {
             lastSave = Date()
+            // Written again in binary.
+            if savedAsJSON { dirty = true }
         } else {
             upgrading = true
             upgradingFrom = file.version
@@ -385,9 +399,14 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     private struct CacheHeader: Decodable {
         var version: Int
         var root: String
+        var newerFormat = false
+
+        enum CodingKeys: CodingKey {
+            case version, root
+        }
     }
 
-    private struct CacheFile: Codable {
+    private struct CacheFile: Decodable {
         var version: Int
         var root: String
         var records: [String: FileRecord]

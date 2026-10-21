@@ -171,16 +171,7 @@ struct PricingTests {
 
         // The saved index becomes one from the previous version, written before one-hour cache writes were
         // recorded, and Claude Code then prunes the old transcript.
-        func dropHourField(_ value: Any) -> Any {
-            if let object = value as? [String: Any] {
-                return object.filter { $0.key != "h" }.mapValues(dropHourField)
-            }
-            if let array = value as? [Any] { return array.map(dropHourField) }
-            return value
-        }
-        var file = try #require(dropHourField(JSONSerialization.jsonObject(with: Data(contentsOf: cache))) as? [String: Any])
-        file["version"] = ClaudeTranscripts.upgradableCacheVersion
-        try JSONSerialization.data(withJSONObject: file).write(to: cache)
+        try makePreviousVersion(cache)
         try FileManager.default.removeItem(at: projects.root.appendingPathComponent("-old"))
 
         let data = await UsageIndex(projectsURL: projects.root, cacheURL: cache).refresh()
@@ -191,6 +182,16 @@ struct PricingTests {
         #expect(data.usage.first { $0.bucket == FileRecord.bucket(Timestamp.parse("2026-10-18T12:00:01Z")!) }?.cacheWriteHour == 1000)
     }
 
+    /// Rewrites a saved Claude index as the previous version wrote it, without one-hour cache writes.
+    private func makePreviousVersion(_ cache: URL) throws {
+        var saved = try #require(IndexFile.decode(Data(contentsOf: cache)))
+        for (key, var record) in saved.records {
+            for id in record.usage.keys { record.usage[id]?.cacheWriteHour = 0 }
+            saved.records[key] = record
+        }
+        try Data(IndexFile.encode(version: ClaudeTranscripts.upgradableCacheVersion, root: saved.header.root, records: saved.records)).write(to: cache)
+    }
+
     @Test func reviewUpgradeRetriesUnreadableTranscript() async throws {
         let projects = try TempProjects()
         let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache.json")
@@ -199,16 +200,7 @@ struct PricingTests {
         let first = UsageIndex(projectsURL: projects.root, cacheURL: cache)
         _ = await first.refresh()
         await first.save()
-        var file = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: cache)) as? [String: Any])
-        file["version"] = ClaudeTranscripts.upgradableCacheVersion
-        func dropHour(_ value: Any) -> Any {
-            if let object = value as? [String: Any] {
-                return object.filter { $0.key != "h" }.mapValues(dropHour)
-            }
-            if let array = value as? [Any] { return array.map(dropHour) }
-            return value
-        }
-        try JSONSerialization.data(withJSONObject: dropHour(file)).write(to: cache)
+        try makePreviousVersion(cache)
         try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path) }
         #expect((try? Data(contentsOf: transcript)) == nil)
