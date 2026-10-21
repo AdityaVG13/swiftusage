@@ -335,6 +335,29 @@ struct LimitsTests {
         }
     }
 
+    @Test func anUnansweredResetsRequestIsAskedAgainNextReading() async {
+        let grantsAnswered = Mutex(false)
+        func reading() async -> AccountLimits {
+            await HTTP.$transport.withValue({ request in
+                if request.url!.query?.contains("cedar_ember") == true {
+                    guard grantsAnswered.withLock({ $0 }) else { return nil }
+                    let body = #"{"cedar_ember":{"eligible":true,"grants":[{"id":"g1","resets_left":2}],"next_grant_id":"g1"}}"#
+                    return HTTP.Response(status: 200, headers: [:], data: Data(body.utf8))
+                }
+                if request.url!.path.hasSuffix("/usage") {
+                    return HTTP.Response(status: 200, headers: [:], data: Data(#"{"five_hour":{"utilization":10}}"#.utf8))
+                }
+                return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+            }) {
+                await AnthropicUsage.shared.limits(id: "claude:grants-retry", provider: .claude, account: "Personal",
+                                                   token: "grants-token", renew: "Run `claude`.", plan: "Max")
+            }
+        }
+        #expect(await reading().resets == nil)
+        grantsAnswered.withLock { $0 = true }
+        #expect(await reading().resets?.available == 2)
+    }
+
     @Test func claudeLimitsListWithoutPercentsFallsBackToNamedWindows() {
         let body = object("""
             {"limits":[{"kind":"session","resets_at":"2026-10-19T19:10:00Z"}],
