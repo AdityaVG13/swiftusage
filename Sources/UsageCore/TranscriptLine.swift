@@ -344,7 +344,8 @@ enum Timestamp {
         value.isFinite && abs(value) < Double(Int32.max) * 900 ? value : nil
     }
 
-    /// Parses `YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM]` into seconds since 1970 (UTC when no zone is given).
+    /// Parses `YYYY-MM-DDTHH:MM:SS[.fff][Z|±HH:MM|±HHMM|±HH]` into seconds since 1970 (UTC when no zone is
+    /// given). A field out of its range, such as February 30th or minute 60, makes it no time at all.
     static func parse(_ p: UnsafePointer<UInt8>, count: Int) -> Double? {
         guard count >= 19 else { return nil }
         func digits(_ at: Int, _ n: Int) -> Int? {
@@ -358,7 +359,8 @@ enum Timestamp {
         }
         guard let year = digits(0, 4), let month = digits(5, 2), let day = digits(8, 2),
               let hour = digits(11, 2), let minute = digits(14, 2), let second = digits(17, 2),
-              (1...12).contains(month), (1...31).contains(day)
+              (1...12).contains(month), (1...daysInMonth(year: year, month: month)).contains(day),
+              hour <= 23, minute <= 59, second <= 60
         else { return nil }
 
         var seconds = Double(daysFromCivil(year: year, month: month, day: day)) * 86_400
@@ -374,8 +376,15 @@ enum Timestamp {
                 k += 1
             }
         }
-        if k + 5 < count, p[k] == UInt8(ascii: "+") || p[k] == minus,
-           let oh = digits(k + 1, 2), let om = digits(k + 4, 2) {
+        if k + 2 < count, p[k] == UInt8(ascii: "+") || p[k] == minus, let oh = digits(k + 1, 2) {
+            let om: Int? = if k + 5 < count, p[k + 3] == UInt8(ascii: ":") {
+                digits(k + 4, 2)
+            } else if k + 4 < count {
+                digits(k + 3, 2)
+            } else {
+                0
+            }
+            guard let om, oh <= 23, om <= 59 else { return nil }
             let offset = Double(oh * 3600 + om * 60)
             seconds += p[k] == minus ? offset : -offset
         }
@@ -387,6 +396,14 @@ enum Timestamp {
         return copy.withUTF8 { buffer in
             guard let base = buffer.baseAddress else { return nil }
             return parse(base, count: buffer.count)
+        }
+    }
+
+    static func daysInMonth(year: Int, month: Int) -> Int {
+        switch month {
+        case 2: (year % 4 == 0 && year % 100 != 0) || year % 400 == 0 ? 29 : 28
+        case 4, 6, 9, 11: 30
+        default: 31
         }
     }
 

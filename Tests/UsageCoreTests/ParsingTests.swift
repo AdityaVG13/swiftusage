@@ -66,6 +66,13 @@ struct ParsingTests {
         #expect(Timestamp.parse("2026-10-18T07:00:00-05:00") == utc)
         #expect(Timestamp.parse("2026-10-18T12:00:00") == utc)
         #expect(Timestamp.parse("2026-13-18T12:00:00Z") == nil)
+        #expect(Timestamp.parse("2026-10-18T17:30:00+0530") == utc)
+        #expect(Timestamp.parse("2026-10-18T17:00:00.000+05") == utc)
+        #expect(Timestamp.parse("2026-10-18T24:00:00Z") == nil)
+        #expect(Timestamp.parse("2026-10-18T12:60:00Z") == nil)
+        #expect(Timestamp.parse("2026-02-30T12:00:00Z") == nil)
+        #expect(Timestamp.parse("2028-02-29T12:00:00Z") != nil)
+        #expect(Timestamp.parse("2026-10-18T12:00:00+25:00") == nil)
         #expect(Timestamp.parse("yesterday") == nil)
     }
 
