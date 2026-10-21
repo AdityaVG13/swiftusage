@@ -245,7 +245,8 @@ public enum LimitsSources {
         var seenMissing: Set<String> = []
         var resting: [AccountLimits] = []
         for account in accounts where !found.contains(account.id) {
-            guard asked.contains(account.provider) else {
+            // Asked when any tool using it was, such as Pi for a Claude account while Claude is off.
+            guard asked.contains(account.provider) || !asked.isDisjoint(with: account.sharedWith) else {
                 resting.append(account)
                 continue
             }

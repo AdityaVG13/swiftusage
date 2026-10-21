@@ -1098,6 +1098,19 @@ struct LimitsTests {
         #expect(cards.allSatisfy { $0.problem == nil })
     }
 
+    @Test func aCardSharedWithAProviderThatWasAskedIsMissedLikeItsOwn() {
+        var card = AccountLimits(id: "claude:a|o", provider: .claude, account: "Personal",
+                                 meters: [.percent("session", "Session", used: 11, resetsAt: nil, period: 5 * 3600)], updated: now)
+        card.sharedWith = [.pi]
+        var missingSince: [String: Date] = [:]
+        // Claude is off and only Pi was asked, which no longer finds the account.
+        _ = LimitsSources.update([card], with: [], asked: [.pi], missingSince: &missingSince, now: now)
+        let later = LimitsSources.update([card], with: [], asked: [.pi], missingSince: &missingSince, now: now.addingTimeInterval(16 * 60))
+        #expect(later.first?.problem == "Couldn't find this login. Sign in again if you signed out.")
+        // Nothing that uses it asked: it rests as it was.
+        #expect(LimitsSources.update([card], with: [], asked: [.codex], missingSince: &missingSince, now: now).first?.problem == nil)
+    }
+
     @Test func onlyALoneCardIsTakenAsRenamed() {
         let meter = LimitMeter.percent("session", "Session", used: 11, resetsAt: nil, period: 5 * 3600)
         func card(_ id: String, _ name: String) -> AccountLimits {

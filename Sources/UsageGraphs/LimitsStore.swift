@@ -102,7 +102,7 @@ final class LimitsStore {
 
     /// Every account of the providers that are on, including ones turned off, for Customize.
     var followedAccounts: [AccountLimits] {
-        accounts.filter { preferences.isShown($0.provider) }
+        accounts.filter(isFollowed)
     }
 
     /// Whether the person hid any of `provider`'s accounts (or any account, for nil) in Customize.
@@ -110,8 +110,14 @@ final class LimitsStore {
         followedAccounts.contains { (provider.map($0.isUsed(by:)) ?? true) && hidden.contains($0.id) }
     }
 
+    /// Whether a provider using the account is on: its own, or another tool signed in to it too, whose
+    /// reading takes the card over at the next reading anyway.
+    private func isFollowed(_ account: AccountLimits) -> Bool {
+        ([account.provider] + account.sharedWith).contains(where: preferences.isShown)
+    }
+
     func isShown(_ account: AccountLimits) -> Bool {
-        !hidden.contains(account.id) && preferences.isShown(account.provider)
+        !hidden.contains(account.id) && isFollowed(account)
     }
 
     func setShown(_ account: AccountLimits, _ shown: Bool) {
