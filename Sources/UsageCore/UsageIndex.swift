@@ -130,6 +130,9 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     /// Set when the saved index is from an older version: the next scan reads every transcript still on
     /// disk again and keeps the summaries of the rest.
     private var upgrading = false
+    /// The saved index's version until every transcript on disk has been read again, so an index saved
+    /// part way through the upgrade (the app quitting, say) is upgraded again on the next launch.
+    private var upgradingFrom: Int?
     /// Set when the saved index belongs to a newer build or another folder: it's left untouched.
     private var savingDisabled = false
     private var dirty = false
@@ -179,7 +182,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
 
     public func save() {
         guard dirty, !savingDisabled, let cacheURL else { return }
-        let file = CacheFile(version: Format.cacheVersion, root: root.path, records: records)
+        let file = CacheFile(version: upgradingFrom ?? Format.cacheVersion, root: root.path, records: records)
         do {
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try JSONEncoder().encode(file).write(to: cacheURL, options: .atomic)
@@ -206,6 +209,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         // Upgrading reads every transcript still on disk from the start. Their old summaries stay until
         // the new ones are read, so a file that can't be read keeps what it had.
         let rereading = upgrading ? Set(found.keys) : []
+        let finishesUpgrade = upgrading
         upgrading = false
         var jobs: [Job] = []
         var changed = false
@@ -264,6 +268,8 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                 }
             }
         }
+
+        if finishesUpgrade { upgradingFrom = nil }
 
         if !jobs.isEmpty || changed {
             dirty = true
@@ -360,6 +366,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             lastSave = Date()
         } else {
             upgrading = true
+            upgradingFrom = file.version
             dirty = true
         }
     }

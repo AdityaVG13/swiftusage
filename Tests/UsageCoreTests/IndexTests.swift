@@ -428,3 +428,61 @@ struct MergedStatsTests {
         #expect(none == StatsBuilder.build(UsageData(), range: .all, now: Date(timeIntervalSince1970: 20_000 * 86_400 + 3600), clock: utc))
     }
 }
+
+/// Claude Code's transcripts, read only once `gate` is signaled, so a test can act while a scan is
+/// part way through.
+enum GatedTranscripts: TranscriptFormat {
+    static let provider = Provider.claude
+    static let cacheName = "gated-index.json"
+    static let cacheVersion = 2
+    static let upgradableCacheVersion = 1
+    static let entered = DispatchSemaphore(value: 0)
+    static let gate = DispatchSemaphore(value: 0)
+
+    static func discover(in root: URL) -> [String: TranscriptInfo] { ClaudeTranscripts.discover(in: root) }
+
+    static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool {
+        ClaudeTranscripts.ingest(line, lineOffset: lineOffset, pathHash: pathHash, into: &record)
+    }
+
+    static func read(path: String, into record: inout FileRecord) -> Bool {
+        entered.signal()
+        gate.wait()
+        return TranscriptReader.read(path: path, into: &record, ingest: ingest)
+    }
+}
+
+struct UpgradeTests {
+    struct Cache: Codable {
+        var version: Int
+        var root: String
+        var records: [String: FileRecord]
+    }
+
+    @Test func quittingMidUpgradeLeavesTheUpgradeToTheNextLaunch() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let url = try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:02Z"), Lines.assistant("2026-10-18T09:00:03Z", id: "msg_1")])
+        // The older version's summary of the transcript, missing the usage the newer version records.
+        let info = try #require(TranscriptInfo.of(url.path))
+        var old = FileRecord(isSubagent: false)
+        (old.size, old.modified, old.inode, old.offset) = (info.size, info.modified, info.inode, info.size)
+        try JSONEncoder().encode(Cache(version: 1, root: projects.root.path, records: ["-p/s.jsonl": old])).write(to: cache)
+
+        let index = TranscriptIndex<GatedTranscripts>(root: projects.root, cacheURL: cache)
+        async let upgraded = index.refresh()
+        await withCheckedContinuation { done in DispatchQueue.global().async { GatedTranscripts.entered.wait(); done.resume() } }
+        // The app quits while the transcript is being read again.
+        await index.save()
+        #expect(try JSONDecoder().decode(Cache.self, from: Data(contentsOf: cache)).version == 1)
+        GatedTranscripts.gate.signal()
+        #expect(await upgraded.usage.count == 1)
+
+        let relaunched = TranscriptIndex<GatedTranscripts>(root: projects.root, cacheURL: cache)
+        GatedTranscripts.gate.signal()
+        #expect(await relaunched.refresh().usage.count == 1)
+        await relaunched.save()
+        #expect(try JSONDecoder().decode(Cache.self, from: Data(contentsOf: cache)).version == 2)
+    }
+}
