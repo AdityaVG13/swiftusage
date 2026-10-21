@@ -86,6 +86,8 @@ final class LoginItem {
     private(set) var isEnabled = false
     /// Why the last change didn't take.
     private(set) var problem: String?
+    /// Counts changes asked for, so only the latest one's outcome is shown.
+    @ObservationIgnored private var attempt = 0
 
     private init() {
         reload()
@@ -96,20 +98,32 @@ final class LoginItem {
         if isEnabled { problem = nil }
     }
 
+    /// Shows the change at once and asks macOS for it off the main thread, then shows what macOS did.
     func set(_ enabled: Bool) {
-        let service = SMAppService.mainApp
-        var failure: Error?
-        do {
-            if enabled {
-                try service.register()
-            } else {
-                try service.unregister()
+        isEnabled = enabled
+        problem = nil
+        attempt += 1
+        let attempt = attempt
+        Task.detached {
+            let service = SMAppService.mainApp
+            var failure: Error?
+            do {
+                if enabled {
+                    try service.register()
+                } else {
+                    try await service.unregister()
+                }
+            } catch {
+                failure = error
+                NSLog("swiftusage: login item change failed: \(error)")
             }
-        } catch {
-            failure = error
-            NSLog("swiftusage: login item change failed: \(error)")
+            let status = service.status
+            await self.landed(enabled, status: status, failure: failure, attempt: attempt)
         }
-        let status = service.status
+    }
+
+    private func landed(_ enabled: Bool, status: SMAppService.Status, failure: Error?, attempt: Int) {
+        guard attempt == self.attempt else { return }
         isEnabled = status == .enabled
         guard isEnabled != enabled else {
             problem = nil
