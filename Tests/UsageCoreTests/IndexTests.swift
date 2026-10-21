@@ -320,18 +320,19 @@ struct IndexTests {
         #expect(try String(contentsOf: cache, encoding: .utf8) == newer)
 
         // Two unreadable indexes in a row are both set aside under timestamped names, never overwriting the earlier one.
+        try FileManager.default.removeItem(at: cache)
         for bad in ["{not json", "{broken second"] {
-            try Data(bad.utf8).write(to: cache)
+            try Data(bad.utf8).write(to: UsageIndex.binaryURL(cache))
             let fresh = UsageIndex(projectsURL: projects.root, cacheURL: cache)
             _ = await fresh.refresh()
             await fresh.save()
         }
         let entries = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("index.json.unreadable-") }
+            .filter { $0.lastPathComponent.hasPrefix("index.bin.unreadable-") }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         #expect(entries.count == 2)
         #expect(entries.allSatisfy {
-            $0.lastPathComponent.range(of: #"^index\.json\.unreadable-\d{8}-\d{6}(-\d+)?$"#, options: .regularExpression) != nil
+            $0.lastPathComponent.range(of: #"^index\.bin\.unreadable-\d{8}-\d{6}(-\d+)?$"#, options: .regularExpression) != nil
         })
         let saved = try Set(entries.map { try String(contentsOf: $0, encoding: .utf8) })
         #expect(saved == ["{not json", "{broken second"])
@@ -341,7 +342,8 @@ struct IndexTests {
         let projects = try TempProjects()
         let folder = projects.root.deletingLastPathComponent()
         let cache = folder.appendingPathComponent("cache.json")
-        let backup = cache.appendingPathExtension("unreadable")
+        let saved = UsageIndex.binaryURL(cache)
+        let backup = folder.appendingPathComponent("recovered.json")
         let transcript = try projects.write("-fixture/session.jsonl", [
             Lines.user("2026-01-01T10:00:00Z"),
             Lines.assistant("2026-01-01T10:00:01Z", id: "archived"),
@@ -353,18 +355,18 @@ struct IndexTests {
         await writer.save()
         #expect(archived.usage.count == 1 && archived.transcriptCount == 0)
 
-        let recovery = try Data(contentsOf: cache)
-        try recovery.write(to: backup)
+        let recovery = try Data(contentsOf: saved)
+        try recovery.write(to: UsageIndex.binaryURL(backup))
         let positive = await UsageIndex(projectsURL: projects.root, cacheURL: backup, readOnly: true).refresh()
         #expect(positive.usage.count == 1)
 
-        try Data("{broken".utf8).write(to: cache)
+        try Data("{broken".utf8).write(to: saved)
         let data = await UsageIndex(projectsURL: projects.root, cacheURL: cache, readOnly: true).refresh()
         #expect(data.isEmpty)
-        #expect(try Data(contentsOf: cache) == Data("{broken".utf8))
-        #expect(try Data(contentsOf: backup) == recovery)
+        #expect(try Data(contentsOf: saved) == Data("{broken".utf8))
+        #expect(try Data(contentsOf: UsageIndex.binaryURL(backup)) == recovery)
         let extraBackups = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("cache.json.unreadable-") }
+            .filter { $0.lastPathComponent.contains(".unreadable-") }
         #expect(extraBackups.isEmpty)
     }
 
@@ -409,12 +411,12 @@ struct IndexTests {
         let index = UsageIndex(projectsURL: first.root, cacheURL: cache)
         _ = await index.refresh()
         await index.save()
-        let firstsIndex = try Data(contentsOf: cache)
+        let firstsIndex = try Data(contentsOf: UsageIndex.binaryURL(cache))
 
         let other = UsageIndex(projectsURL: second.root, cacheURL: cache)
         #expect(await other.refresh().usage.count == 2)
         await other.save()
-        #expect(try Data(contentsOf: cache) == firstsIndex)
+        #expect(try Data(contentsOf: UsageIndex.binaryURL(cache)) == firstsIndex)
         // Its own index is read on the next launch, even once its transcripts are gone.
         try FileManager.default.removeItem(at: second.root.appendingPathComponent("-p/s.jsonl"))
         #expect(await UsageIndex(projectsURL: second.root, cacheURL: cache).refresh().usage.count == 2)
@@ -426,15 +428,15 @@ struct IndexTests {
         let folder = projects.root.deletingLastPathComponent().appendingPathComponent("cache")
         let cache = folder.appendingPathComponent("index.json")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let ancient = #"{"version":0,"root":"\#(projects.root.path)","records":{}}"#
-        try Data(ancient.utf8).write(to: cache)
+        let ancient = Data(IndexFile.encode(version: 0, root: projects.root.path, records: [:]))
+        try ancient.write(to: UsageIndex.binaryURL(cache))
         try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
         let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
         _ = await index.refresh()
         await index.save()
         let asides = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
-            .filter { $0.lastPathComponent.hasPrefix("index.json.unreadable-") }
-        #expect(try asides.map { try String(contentsOf: $0, encoding: .utf8) } == [ancient])
+            .filter { $0.lastPathComponent.hasPrefix("index.bin.unreadable-") }
+        #expect(try asides.map { try Data(contentsOf: $0) } == [ancient])
     }
 
     @Test func historyListedInAnotherOrderIsTheSameHistory() {
@@ -533,7 +535,7 @@ struct UpgradeTests {
         await withCheckedContinuation { done in DispatchQueue.global().async { GatedTranscripts.entered.wait(); done.resume() } }
         // The app quits while the transcript is being read again.
         await index.save()
-        #expect(try IndexFile.header(Data(contentsOf: cache))?.version == 1)
+        #expect(try IndexFile.header(Data(contentsOf: UsageIndex.binaryURL(cache)))?.version == 1)
         GatedTranscripts.gate.signal()
         #expect(await upgraded.usage.count == 1)
 
@@ -541,7 +543,7 @@ struct UpgradeTests {
         GatedTranscripts.gate.signal()
         #expect(await relaunched.refresh().usage.count == 1)
         await relaunched.save()
-        #expect(try IndexFile.header(Data(contentsOf: cache))?.version == 2)
+        #expect(try IndexFile.header(Data(contentsOf: UsageIndex.binaryURL(cache)))?.version == 2)
     }
 }
 
@@ -595,20 +597,22 @@ struct IndexFileTests {
         let reader = UsageIndex(projectsURL: projects.root, cacheURL: cache)
         _ = await reader.refresh()
         await reader.save()
-        var records = try #require(IndexFile.decode(Data(contentsOf: cache))).records
+        var records = try #require(IndexFile.decode(Data(contentsOf: UsageIndex.binaryURL(cache)))).records
         var deleted = FileRecord(isSubagent: false)
         deleted.missingSince = 1_792_000_000
         deleted.usage = [9: UsageRecord(bucket: 1_990_000, model: "claude-opus-5-5", tokens: TokenCounts(input: 5))]
         records["-q/deleted.jsonl"] = deleted
         struct Legacy: Encodable { var version: Int; var root: String; var records: [String: FileRecord] }
-        try JSONEncoder().encode(Legacy(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: records)).write(to: cache)
+        let legacy = try JSONEncoder().encode(Legacy(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: records))
+        try legacy.write(to: cache)
+        try FileManager.default.removeItem(at: UsageIndex.binaryURL(cache))
 
         let relaunched = UsageIndex(projectsURL: projects.root, cacheURL: cache)
         #expect(await relaunched.refresh().usage.count == 2)
         await relaunched.save()
-        let saved = try Data(contentsOf: cache)
-        #expect(IndexFile.isIndexFile(saved))
-        #expect(IndexFile.decode(saved)?.records == records)
+        #expect(IndexFile.decode(try Data(contentsOf: UsageIndex.binaryURL(cache)))?.records == records)
+        // Left for the earlier versions that read it.
+        #expect(try Data(contentsOf: cache) == legacy)
     }
 
     @Test func aLaterFormatIsLeftAlone() async throws {
@@ -617,11 +621,11 @@ struct IndexFileTests {
         try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
         var later = Data(IndexFile.encode(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: [:]))
         later[4] = UInt8(IndexFile.format + 1)
-        try later.write(to: cache)
+        try later.write(to: UsageIndex.binaryURL(cache))
         try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
         let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
         _ = await index.refresh()
         await index.save()
-        #expect(try Data(contentsOf: cache) == later)
+        #expect(try Data(contentsOf: UsageIndex.binaryURL(cache)) == later)
     }
 }

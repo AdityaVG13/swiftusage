@@ -184,12 +184,13 @@ struct PricingTests {
 
     /// Rewrites a saved Claude index as the previous version wrote it, without one-hour cache writes.
     private func makePreviousVersion(_ cache: URL) throws {
-        var saved = try #require(IndexFile.decode(Data(contentsOf: cache)))
+        var saved = try #require(IndexFile.decode(Data(contentsOf: UsageIndex.binaryURL(cache))))
         for (key, var record) in saved.records {
             for id in record.usage.keys { record.usage[id]?.cacheWriteHour = 0 }
             saved.records[key] = record
         }
-        try Data(IndexFile.encode(version: ClaudeTranscripts.upgradableCacheVersion, root: saved.header.root, records: saved.records)).write(to: cache)
+        try Data(IndexFile.encode(version: ClaudeTranscripts.upgradableCacheVersion, root: saved.header.root, records: saved.records))
+            .write(to: UsageIndex.binaryURL(cache))
     }
 
     @Test func reviewUpgradeRetriesUnreadableTranscript() async throws {

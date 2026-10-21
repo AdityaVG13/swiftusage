@@ -189,7 +189,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try file.withUnsafeBytes { bytes in
                 try Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: bytes.baseAddress!), count: bytes.count, deallocator: .none)
-                    .write(to: cacheURL, options: .atomic)
+                    .write(to: Self.binaryURL(cacheURL), options: .atomic)
             }
             dirty = false
             lastSave = Date()
@@ -345,21 +345,32 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         return data
     }
 
+    /// Where the index is saved: beside `cacheURL`, where earlier versions kept it as JSON. That copy is
+    /// read while there's no other, and left for those versions.
+    static func binaryURL(_ cacheURL: URL) -> URL {
+        cacheURL.deletingPathExtension().appendingPathExtension("bin")
+    }
+
     private func loadCache() {
         loadedCache = true
+        guard let cacheURL else { return }
+        let binaryURL = Self.binaryURL(cacheURL)
+        var file: CacheFile?
+        var header: CacheHeader?
         // Mapped rather than copied in: it's only read once, record by record.
-        guard let cacheURL, let raw = try? Data(contentsOf: cacheURL, options: .alwaysMapped) else { return }
-        let file: CacheFile?
-        let header: CacheHeader?
-        let savedAsJSON = !IndexFile.isIndexFile(raw)
+        if let raw = try? Data(contentsOf: binaryURL, options: .alwaysMapped) {
+            file = IndexFile.decode(raw).map { CacheFile(version: $0.header.version, root: $0.header.root, records: $0.records) }
+            header = IndexFile.header(raw).map { CacheHeader(version: $0.version, root: $0.root, newerFormat: $0.format > IndexFile.format) }
+            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
+            if header == nil, !savingDisabled { UnreadableFile.setAside(binaryURL) }
+        }
+        let savedAsJSON = header == nil
         if savedAsJSON {
-            // How indexes were saved before. A newer build's records may not decode here, so only its header is read then.
+            // A newer build's records may not decode here, so only its header is read then.
+            guard let raw = try? Data(contentsOf: cacheURL) else { return }
             let decoder = JSONDecoder()
             file = try? decoder.decode(CacheFile.self, from: raw)
             header = file.map { CacheHeader(version: $0.version, root: $0.root) } ?? (try? decoder.decode(CacheHeader.self, from: raw))
-        } else {
-            file = IndexFile.decode(raw).map { CacheFile(version: $0.header.version, root: $0.header.root, records: $0.records) }
-            header = IndexFile.header(raw).map { CacheHeader(version: $0.version, root: $0.root, newerFormat: $0.format > IndexFile.format) }
         }
         if let header, header.root != root.path, !cacheKeyedByRoot {
             // Another folder's index (a different `CLAUDE_CONFIG_DIR`) stays as it is; this folder's lives beside it.
@@ -373,15 +384,13 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             savingDisabled = true
             return
         }
-        // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
         guard let file, file.version >= Format.upgradableCacheVersion else {
-            if !savingDisabled { UnreadableFile.setAside(cacheURL) }
+            if !savedAsJSON, !savingDisabled { UnreadableFile.setAside(binaryURL) }
             return
         }
         records = file.records
         if file.version == Format.cacheVersion {
             lastSave = Date()
-            // Written again in binary.
             if savedAsJSON { dirty = true }
         } else {
             upgrading = true
