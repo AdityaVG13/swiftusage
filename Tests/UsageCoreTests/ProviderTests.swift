@@ -116,6 +116,15 @@ struct ProviderTests {
         #expect(await index.refresh().usage.count == 40)
     }
 
+    @Test func anArchiveThatCantBeReadIsntTakenForDamaged() throws {
+        // A folder named like an archive opens but fails to read, as a file on a failing disk can.
+        let home = try TempProjects()
+        let folder = home.root.appendingPathComponent("rollout-x.jsonl.zst")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var record = FileRecord(isSubagent: false)
+        #expect(TranscriptReader.read(path: folder.path, into: &record, ingest: CodexTranscripts.ingest) == .unreadable)
+    }
+
     @Test func truncatedZstdIsAcceptedAsComplete() throws {
         let home = try TempProjects()
         let line = Data((codexTokenCount("2026-10-18T10:00:00Z", last: codexUsage(100, cached: 0, output: 10), total: codexUsage(100, cached: 0, output: 10)) + "\n").utf8)
@@ -130,7 +139,7 @@ struct ProviderTests {
         try frame.write(to: validURL)
         var validRecord = FileRecord(isSubagent: false)
         validRecord.size = UInt64(frame.count)
-        #expect(TranscriptReader.read(path: validURL.path, into: &validRecord, ingest: CodexTranscripts.ingest))
+        #expect(TranscriptReader.read(path: validURL.path, into: &validRecord, ingest: CodexTranscripts.ingest) == .read)
         #expect(validRecord.usage.count == 1)
         #expect(validRecord.offset == validRecord.size)
 
@@ -139,8 +148,7 @@ struct ProviderTests {
         try truncated.write(to: truncatedURL)
         var record = FileRecord(isSubagent: false)
         record.size = UInt64(truncated.count)
-        let success = TranscriptReader.read(path: truncatedURL.path, into: &record) { _, _, _, _ in true }
-        #expect(!success)
+        #expect(TranscriptReader.read(path: truncatedURL.path, into: &record) { _, _, _, _ in true } == .damaged)
         #expect(record.offset == 0)
     }
 

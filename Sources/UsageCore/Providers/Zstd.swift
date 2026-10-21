@@ -12,6 +12,8 @@ enum Zstd {
         private var inBuffer = ZSTD_inBuffer(src: nil, size: 0, pos: 0)
         private var finished = false
         private var lastResult = 0
+        /// Set when the data itself is bad, rather than reading the file failing.
+        private(set) var damaged = false
 
         init?(fd: Int32) {
             guard let context = ZSTD_createDStream() else { return nil }
@@ -35,7 +37,11 @@ enum Zstd {
                     let n = Foundation.read(fd, input, inputCapacity)
                     if n < 0 { if errno == EINTR { continue }; return -1 }
                     if n == 0 {
-                        if lastResult != 0 { return -1 }
+                        if lastResult != 0 {
+                            // The file ended inside a frame.
+                            damaged = true
+                            return -1
+                        }
                         finished = true
                         break
                     }
@@ -43,7 +49,10 @@ enum Zstd {
                     inBuffer.pos = 0
                 }
                 let result = ZSTD_decompressStream(context, &out, &inBuffer)
-                if ZSTD_isError(result) != 0 { return -1 }
+                if ZSTD_isError(result) != 0 {
+                    damaged = true
+                    return -1
+                }
                 lastResult = result
                 // A frame ended and there's no input left to start another.
                 if result == 0, inBuffer.pos == inBuffer.size, out.pos > 0 { break }

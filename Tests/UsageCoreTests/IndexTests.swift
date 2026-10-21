@@ -386,7 +386,7 @@ struct IndexTests {
         // A folder opens but can't be read, as a file on a failing disk can't be past some point.
         let projects = try TempProjects()
         var record = FileRecord(isSubagent: false)
-        #expect(!TranscriptReader.read(path: projects.root.path, into: &record, ingest: ClaudeTranscripts.ingest))
+        #expect(TranscriptReader.read(path: projects.root.path, into: &record, ingest: ClaudeTranscripts.ingest) == .unreadable)
     }
 
     @Test func aTranscriptRewrittenInPlaceIsReadAgainFromTheStart() async throws {
@@ -529,7 +529,7 @@ enum GatedTranscripts: TranscriptFormat {
         ClaudeTranscripts.ingest(line, lineOffset: lineOffset, pathHash: pathHash, into: &record)
     }
 
-    static func read(path: String, into record: inout FileRecord) -> Bool {
+    static func read(path: String, into record: inout FileRecord) -> TranscriptRead {
         entered.signal()
         gate.wait()
         return TranscriptReader.read(path: path, into: &record, ingest: ingest)
@@ -551,7 +551,7 @@ enum CountedTranscripts: TranscriptFormat {
         ClaudeTranscripts.ingest(line, lineOffset: lineOffset, pathHash: pathHash, into: &record)
     }
 
-    static func read(path: String, into record: inout FileRecord) -> Bool {
+    static func read(path: String, into record: inout FileRecord) -> TranscriptRead {
         reads.withLock { $0 += 1 }
         entered.signal()
         gate.wait()

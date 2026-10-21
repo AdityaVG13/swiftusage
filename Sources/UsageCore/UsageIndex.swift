@@ -110,7 +110,7 @@ public protocol TranscriptFormat: Sendable {
     /// object, which at the end of a file means it's still being written.
     static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool
     /// Reads `path` from `record.offset` into `record`.
-    static func read(path: String, into record: inout FileRecord) -> Bool
+    static func read(path: String, into record: inout FileRecord) -> TranscriptRead
     /// Folders to watch for changes, if not all of `root`.
     static func watchedPaths(root: URL) -> [String]
     /// Whether a last line without a newline is read when it parses. Formats that skip lines without
@@ -122,9 +122,18 @@ extension TranscriptFormat {
     public static var upgradableCacheVersion: Int { cacheVersion }
     public static var readsUnterminatedLastLine: Bool { false }
     public static func watchedPaths(root: URL) -> [String] { [root.path] }
-    public static func read(path: String, into record: inout FileRecord) -> Bool {
+    public static func read(path: String, into record: inout FileRecord) -> TranscriptRead {
         TranscriptReader.read(path: path, into: &record, unterminated: readsUnterminatedLastLine, ingest: ingest)
     }
+}
+
+/// How reading a transcript went.
+public enum TranscriptRead: Sendable {
+    case read
+    /// It couldn't be opened or read through, which may pass, so it's tried again next time.
+    case unreadable
+    /// A compressed transcript whose data the decoder refused, which reading it again won't change.
+    case damaged
 }
 
 /// Keeps a per-transcript summary of one tool's transcripts, re-reading only bytes appended since the
@@ -257,33 +266,33 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         }
 
         if !jobs.isEmpty {
-            let archives = Dictionary(jobs.filter { $0.path.hasSuffix(".zst") }.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
+            let stamps = Dictionary(jobs.map { ($0.key, $0.record) }, uniquingKeysWith: { first, _ in first })
             jobs.sort { ($0.record.size - min($0.record.offset, $0.record.size)) > ($1.record.size - min($1.record.offset, $1.record.size)) }
             let total = jobs.reduce(Int64(0)) { $0 + Int64($1.record.size - min($1.record.offset, $1.record.size)) }
             var bytesDone: Int64 = 0
             var filesDone = 0
             progress?(ScanProgress(bytesRead: 0, bytesTotal: total, filesDone: 0, filesTotal: jobs.count))
 
-            await withTaskGroup(of: (String, FileRecord?, Int64).self) { group in
+            await withTaskGroup(of: (String, FileRecord?, Int64, TranscriptRead).self) { group in
                 for job in jobs {
                     group.addTask {
                         var record = job.record
                         let start = record.offset
-                        guard Format.read(path: job.path, into: &record) else { return (job.key, nil, 0) }
-                        return (job.key, record, Int64(record.offset - min(start, record.offset)))
+                        let outcome = Format.read(path: job.path, into: &record)
+                        guard outcome == .read else { return (job.key, nil, 0, outcome) }
+                        return (job.key, record, Int64(record.offset - min(start, record.offset)), outcome)
                     }
                 }
-                for await (key, record, bytes) in group {
+                for await (key, record, bytes, outcome) in group {
                     // A file that couldn't be read (deleted mid-scan, not readable) keeps its last
                     // summary and is tried again next time.
                     if let record {
                         records[key] = record
-                    } else if let archive = archives[key], Self.opens(archive.path) {
+                    } else if outcome == .damaged, let stamp = stamps[key] {
                         // A damaged archive only fails once it's been read through, so rather than being
-                        // decompressed again on every pass it waits for another copy, keeping what it had. One
-                        // that couldn't even be opened (its permissions, say) is tried again like any file.
-                        var kept = records[key] ?? archive.record
-                        (kept.size, kept.modified, kept.inode) = (archive.record.size, archive.record.modified, archive.record.inode)
+                        // decompressed again on every pass it waits for another copy, keeping what it had.
+                        var kept = records[key] ?? stamp
+                        (kept.size, kept.modified, kept.inode) = (stamp.size, stamp.modified, stamp.inode)
                         records[key] = kept
                     } else if rereading.contains(key) {
                         records[key]?.inode = 0
@@ -365,13 +374,6 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             data.sessionStarts.append(start)
         }
         return data
-    }
-
-    private static func opens(_ path: String) -> Bool {
-        let fd = open(path, O_RDONLY)
-        guard fd >= 0 else { return false }
-        close(fd)
-        return true
     }
 
     /// Where the index is saved: beside `cacheURL`, where earlier versions kept it as JSON. That copy is

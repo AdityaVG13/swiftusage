@@ -30,7 +30,7 @@ public enum GrokTranscripts: TranscriptFormat {
 
     /// Grok rewrites `summary.json` with every update, so the log is read on from where it was left unless
     /// the summary changed whether the session is a subagent.
-    public static func read(path: String, into record: inout FileRecord) -> Bool {
+    public static func read(path: String, into record: inout FileRecord) -> TranscriptRead {
         let summaryURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("summary.json")
         let subagent = JSONValue.object(file: summaryURL)?["session_kind"] as? String == "subagent"
         if subagent != (record.context?["subagent"] != nil) {
@@ -39,7 +39,7 @@ public enum GrokTranscripts: TranscriptFormat {
         }
         if subagent {
             record.offset = record.size
-            return true
+            return .read
         }
         return TranscriptReader.read(path: path, into: &record, unterminated: readsUnterminatedLastLine, ingest: ingest)
     }

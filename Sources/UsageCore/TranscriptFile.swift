@@ -143,23 +143,24 @@ enum TranscriptReader {
     typealias Ingest = (UnsafeRawBufferPointer, UInt64, UInt64, inout FileRecord) -> Bool
 
     /// Reads `path` from `record.offset` to the end, folding every complete line into `record`.
-    /// A zstd-compressed file (`.zst`) is read whole and can't be resumed part way. Returns false if
-    /// the file could not be opened or decompressed.
-    static func read(path: String, into record: inout FileRecord, unterminated: Bool = true, ingest: Ingest) -> Bool {
+    /// A zstd-compressed file (`.zst`) is read whole and can't be resumed part way.
+    static func read(path: String, into record: inout FileRecord, unterminated: Bool = true, ingest: Ingest) -> TranscriptRead {
         let fd = open(path, O_RDONLY)
-        guard fd >= 0 else { return false }
+        guard fd >= 0 else { return .unreadable }
         defer { close(fd) }
 
         let pathHash = fnv1a(path)
         let compressed = path.hasSuffix(".zst")
         let fill: (UnsafeMutableRawPointer, Int) -> Int
+        var stream: Zstd.Stream?
         if compressed {
-            guard let stream = Zstd.Stream(fd: fd) else { return false }
+            guard let opened = Zstd.Stream(fd: fd) else { return .unreadable }
+            stream = opened
             record.offset = 0
-            fill = { stream.read(into: $0, count: $1) }
+            fill = { opened.read(into: $0, count: $1) }
         } else {
             if record.offset > 0, let tail = record.tail, Self.tail(fd, before: record.offset) != tail { record.restart() }
-            if record.offset > 0, lseek(fd, off_t(record.offset), SEEK_SET) < 0 { return false }
+            if record.offset > 0, lseek(fd, off_t(record.offset), SEEK_SET) < 0 { return .unreadable }
             fill = { buffer, count in
                 while true {
                     let n = Foundation.read(fd, buffer, count)
@@ -185,7 +186,7 @@ enum TranscriptReader {
             }
             let n = fill(buffer + filled, capacity - filled)
             // A failed read isn't the end of the file: the record keeps its old stamp and is read again.
-            if n < 0 { return false }
+            if n < 0 { return stream?.damaged == true ? .damaged : .unreadable }
             if n == 0 { break }
             filled += n
 
@@ -210,7 +211,7 @@ enum TranscriptReader {
         // A compressed file's offset is its compressed size, so an unchanged file reads as fully read.
         record.offset = compressed ? record.size : consumed
         record.tail = compressed ? nil : tail(fd, before: consumed)
-        return true
+        return .read
     }
 
     /// A hash of the up to 64 bytes before `offset`.
