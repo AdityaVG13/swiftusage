@@ -163,8 +163,15 @@ public enum PriceSources {
 public actor PriceUpdates {
     public static let shared = PriceUpdates()
     static let source = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
-    private static let session = URLSession(configuration: .ephemeral)
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        // A body that trickles in would otherwise keep the fetch open for days.
+        configuration.timeoutIntervalForResource = 120
+        return URLSession(configuration: configuration)
+    }()
     private static let maxAge: TimeInterval = 86_400
+    /// A fetch under way, which a later call leaves to finish rather than starting another.
+    private var fetching = false
 
     private let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("dev.tasteskill.UsageGraphs/prices.json")
@@ -184,8 +191,11 @@ public actor PriceUpdates {
     /// Fetches the list if the cached copy is over a day old. Returns the new prices, or nil when nothing
     /// changed or the fetch failed.
     public func refreshIfStale() async -> PriceList? {
+        guard !fetching else { return nil }
         let cache = loadCache()
         if let cache, Date().timeIntervalSince(cache.fetchedAt) < Self.maxAge { return nil }
+        fetching = true
+        defer { fetching = false }
         var request = URLRequest(url: Self.source, timeoutInterval: 30)
         if let etag = cache?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
         guard let (data, response) = try? await Self.session.data(for: request),
