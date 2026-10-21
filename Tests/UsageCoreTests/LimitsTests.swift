@@ -175,7 +175,8 @@ struct LimitsTests {
         try FileManager.default.createDirectory(at: xdg.appendingPathComponent("devin"), withIntermediateDirectories: true)
         try "windsurf_api_key = \"xdg-key\"\n".write(to: xdg.appendingPathComponent("devin/credentials.toml"), atomically: true, encoding: .utf8)
 
-        let suite = "usagegraphs-devin-xdg-\(UUID().uuidString)"
+        // One suite per test, emptied after: preferences keeps a file for every suite name ever used.
+        let suite = "usagegraphs-tests-devin-xdg"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let configured = EnvironmentFolders.seen("XDG_DATA_HOME", environment: ["XDG_DATA_HOME": xdg.path], defaults: defaults)
@@ -1033,7 +1034,7 @@ struct LimitsTests {
     }
 
     @Test func environmentFoldersAreRememberedUntilTheyreGone() throws {
-        let suite = "usagegraphs-tests-\(UUID().uuidString)"
+        let suite = "usagegraphs-tests-environment-folders"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-env-\(UUID().uuidString)")
