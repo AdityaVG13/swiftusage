@@ -75,6 +75,9 @@ public struct FileRecord: Codable, Sendable {
     public var inode: UInt64 = 0
     /// Byte offset just past the last fully parsed line. Appended data is read from here.
     public var offset: UInt64 = 0
+    /// A hash of the bytes just before `offset`, so a file written again in place, rather than appended
+    /// to, is read again from the start.
+    public var tail: UInt64?
     public var isSubagent: Bool
     /// Set once the transcript disappears from disk. Claude Code prunes old transcripts, so the
     /// summary is kept to preserve all-time history.
@@ -99,6 +102,13 @@ public struct FileRecord: Codable, Sendable {
 
     public init(isSubagent: Bool) {
         self.isSubagent = isSubagent
+    }
+
+    /// Forgets what's been read of the file, keeping its stamp.
+    mutating func restart() {
+        var fresh = FileRecord(isSubagent: isSubagent)
+        (fresh.size, fresh.modified, fresh.inode) = (size, modified, inode)
+        self = fresh
     }
 
     static let quarterHour: Double = 900
@@ -160,6 +170,7 @@ enum TranscriptReader {
             record.offset = 0
             fill = { stream.read(into: $0, count: $1) }
         } else {
+            if record.offset > 0, let tail = record.tail, Self.tail(fd, before: record.offset) != tail { record.restart() }
             if record.offset > 0, lseek(fd, off_t(record.offset), SEEK_SET) < 0 { return false }
             fill = { buffer, count in
                 while true {
@@ -209,6 +220,17 @@ enum TranscriptReader {
         }
         // A compressed file's offset is its compressed size, so an unchanged file reads as fully read.
         record.offset = compressed ? record.size : consumed
+        record.tail = compressed ? nil : tail(fd, before: consumed)
         return true
+    }
+
+    /// A hash of the up to 64 bytes before `offset`.
+    static func tail(_ fd: Int32, before offset: UInt64) -> UInt64? {
+        let count = Int(min(offset, 64))
+        guard count > 0 else { return nil }
+        var bytes = [UInt8](repeating: 0, count: count)
+        let read = bytes.withUnsafeMutableBytes { pread(fd, $0.baseAddress, count, off_t(offset) - off_t(count)) }
+        guard read == count else { return nil }
+        return bytes.withUnsafeBufferPointer { fnv1a($0.baseAddress!, count: count) }
     }
 }

@@ -379,6 +379,26 @@ struct IndexTests {
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
 
+    @Test func aTranscriptRewrittenInPlaceIsReadAgainFromTheStart() async throws {
+        let projects = try TempProjects()
+        let url = try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T01:00:00Z", uuid: "a"), Lines.user("2026-10-18T02:00:00Z", uuid: "b")])
+        let inode = try #require(TranscriptInfo.of(url.path)).inode
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: nil)
+        _ = await index.refresh()
+
+        // The same file, truncated and written again with other lines and more of them.
+        let rewritten = [Lines.user("2026-10-18T04:00:00Z", uuid: "c"), Lines.user("2026-10-18T05:00:00Z", uuid: "d"),
+                         Lines.user("2026-10-18T06:00:00Z", uuid: "e")].joined(separator: "\n") + "\n"
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(rewritten.utf8))
+        try handle.close()
+        #expect(try #require(TranscriptInfo.of(url.path)).inode == inode)
+
+        let hours = { (data: UsageData) in data.messageBuckets.keys.map { Int($0) / 4 % 24 }.sorted() }
+        #expect(hours(await index.refresh()) == [4, 5, 6])
+    }
+
     @Test func anotherFoldersIndexStaysAndThisFolderGetsOneBesideIt() async throws {
         let first = try TempProjects(), second = try TempProjects()
         let folder = first.root.deletingLastPathComponent().appendingPathComponent("cache")

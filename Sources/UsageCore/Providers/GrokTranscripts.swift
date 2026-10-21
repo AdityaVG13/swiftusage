@@ -34,10 +34,8 @@ public enum GrokTranscripts: TranscriptFormat {
         let summaryURL = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("summary.json")
         let subagent = JSONValue.object(file: summaryURL)?["session_kind"] as? String == "subagent"
         if subagent != (record.context?["subagent"] != nil) {
-            var fresh = FileRecord(isSubagent: record.isSubagent)
-            (fresh.size, fresh.modified, fresh.inode) = (record.size, record.modified, record.inode)
-            fresh.context = subagent ? ["subagent": "1"] : nil
-            record = fresh
+            record.restart()
+            record.context = subagent ? ["subagent": "1"] : nil
         }
         if subagent {
             record.offset = record.size
