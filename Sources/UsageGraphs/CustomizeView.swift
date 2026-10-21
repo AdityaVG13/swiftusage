@@ -123,7 +123,8 @@ private struct ProvidersPage: View {
         }
         let accounts = limits.accounts.filter { $0.provider == provider }.count
         if accounts > 0 { return accounts == 1 ? "Signed in" : "\(accounts) accounts" }
-        return store.hasLoaded ? "No history yet" : "Reading…"
+        // A provider's stats exist once its history has been read, however little there was.
+        return store.stats[provider] != nil ? "No history yet" : "Reading…"
     }
 }
 
