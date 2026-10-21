@@ -403,7 +403,6 @@ struct ProviderTests {
     }
 
     @Test func openCodeResolvesRelativeDatabaseOverrideAndIgnoresMemory() async throws {
-        defer { unsetenv("OPENCODE_DB") }
         let home = try TempProjects()
         let other = try TempProjects()
         func writeDatabase(at url: URL, input: Int) {
@@ -420,16 +419,13 @@ struct ProviderTests {
         writeDatabase(at: other.root.appendingPathComponent("abs.db"), input: 200)
         writeDatabase(at: home.root.appendingPathComponent(":memory:"), input: 900)
 
-        setenv("OPENCODE_DB", "custom.db", 1)
-        let relative = await OpenCodeSource(root: home.root).refresh()
+        let relative = await OpenCodeSource(root: home.root, databaseOverride: "custom.db").refresh()
         #expect(relative.usage.reduce(0) { $0 + $1.tokens.total } == 110)
 
-        setenv("OPENCODE_DB", other.root.appendingPathComponent("abs.db").path, 1)
-        let absolute = await OpenCodeSource(root: home.root).refresh()
+        let absolute = await OpenCodeSource(root: home.root, databaseOverride: other.root.appendingPathComponent("abs.db").path).refresh()
         #expect(absolute.usage.reduce(0) { $0 + $1.tokens.total } == 210)
 
-        setenv("OPENCODE_DB", ":memory:", 1)
-        let memory = await OpenCodeSource(root: home.root).refresh()
+        let memory = await OpenCodeSource(root: home.root, databaseOverride: ":memory:").refresh()
         #expect(memory.usage.isEmpty)
     }
 

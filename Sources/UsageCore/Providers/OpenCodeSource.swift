@@ -7,10 +7,13 @@ import Foundation
 public actor OpenCodeSource: UsageSource {
     public nonisolated let provider = Provider.opencode
     public nonisolated let root: URL
+    /// `OPENCODE_DB`: one database to read instead of the data folder's, relative to it unless absolute.
+    private nonisolated let databaseOverride: String?
     private var databases: [String: Database] = [:]
 
-    public init(root: URL = OpenCodeSource.defaultRoot) {
+    public init(root: URL = OpenCodeSource.defaultRoot, databaseOverride: String? = ProcessInfo.processInfo.environment["OPENCODE_DB"]) {
         self.root = root
+        self.databaseOverride = databaseOverride
     }
 
     public static var defaultRoot: URL {
@@ -39,7 +42,7 @@ public actor OpenCodeSource: UsageSource {
     public func save() {}
 
     private func databasePaths() -> [String] {
-        if let raw = ProcessInfo.processInfo.environment["OPENCODE_DB"], !raw.isEmpty, raw != ":memory:" {
+        if let raw = databaseOverride, !raw.isEmpty, raw != ":memory:" {
             let expanded = (raw as NSString).expandingTildeInPath
             let url = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : root.appendingPathComponent(expanded)
             return [url.standardizedFileURL.path]
