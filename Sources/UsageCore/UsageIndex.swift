@@ -241,14 +241,16 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         var jobs: [Job] = []
         var changed = false
         for (key, info) in found {
-            if records[key]?.missingSince != nil {
-                records[key]?.missingSince = nil
+            var existing = records[key]
+            if existing?.missingSince != nil {
+                existing?.missingSince = nil
+                records[key] = existing
                 changed = true
             }
-            if !rereading.contains(key), let record = records[key], record.size == info.size, record.modified == info.modified, record.inode == info.inode {
+            if !rereading.contains(key), let record = existing, record.size == info.size, record.modified == info.modified, record.inode == info.inode {
                 continue
             }
-            var record = rereading.contains(key) ? FileRecord(isSubagent: info.isSubagent) : records[key] ?? FileRecord(isSubagent: info.isSubagent)
+            var record = rereading.contains(key) ? FileRecord(isSubagent: info.isSubagent) : existing ?? FileRecord(isSubagent: info.isSubagent)
             // A shrunk, replaced or compressed file can't be resumed from the old offset.
             if record.inode != info.inode || info.size < record.offset || info.path.hasSuffix(".zst") {
                 record = FileRecord(isSubagent: info.isSubagent)
@@ -260,7 +262,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         }
 
         let now = Date().timeIntervalSince1970
-        for key in records.keys where found[key] == nil && records[key]?.missingSince == nil {
+        for (key, record) in records where record.missingSince == nil && found[key] == nil {
             records[key]?.missingSince = now
             changed = true
         }
@@ -489,7 +491,10 @@ enum TranscriptFolders {
         func walk(_ relative: String, _ level: Int) {
             let path = relative.isEmpty ? root.path : root.path + "/" + relative
             guard let entries = try? fm.contentsOfDirectory(atPath: path) else { return }
-            for entry in entries where !entry.hasPrefix(".") {
+            for var entry in entries where !entry.hasPrefix(".") {
+                // Names come from Foundation; hashing and comparing them unconverted, as every scan's lookups
+                // do, normalizes them each time.
+                entry.makeContiguousUTF8()
                 let child = relative.isEmpty ? entry : relative + "/" + entry
                 if level == depth {
                     if include(entry), let info = TranscriptInfo.of(root.path + "/" + child, isSubagent: isSubagent) {

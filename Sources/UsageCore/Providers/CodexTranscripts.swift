@@ -27,7 +27,7 @@ public enum CodexTranscripts: TranscriptFormat {
         var found: [String: TranscriptInfo] = [:]
         func add(_ files: [String: TranscriptInfo]) {
             for (relative, info) in files {
-                let name = (relative as NSString).lastPathComponent
+                let name = relative.split(separator: "/").last.map(String.init) ?? relative
                 let key = name.hasSuffix(".zst") ? String(name.dropLast(4)) : name
                 // While a rollout is being compressed both copies exist; the plain one is complete.
                 if let existing = found[key], !existing.path.hasSuffix(".zst") { continue }
