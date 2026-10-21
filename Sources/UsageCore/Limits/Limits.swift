@@ -256,7 +256,7 @@ public enum LimitsSources {
             .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
     }
 
-    /// How long a login can go unfound before its card says so: three readings.
+    /// How long a login can go unfound before its card says so, however often the limits are read.
     static let missingGrace: TimeInterval = 15 * 60
 
     /// One card per account id: the first reading wins, unless only a later one could be read.
