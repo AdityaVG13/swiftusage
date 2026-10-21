@@ -59,6 +59,11 @@ final class UsageStore {
         }
         timer?.tolerance = 30
 
+        // A night's sleep can end on another day, which rebuilds the stats; otherwise nothing changed.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.apply(rebuilding: []) }
+        }
+
         NotificationCenter.default.addObserver(forName: NSNotification.Name.NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             NSTimeZone.resetSystemTimeZone()
             Task { @MainActor in await self?.apply() }

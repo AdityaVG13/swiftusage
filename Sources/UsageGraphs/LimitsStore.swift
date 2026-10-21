@@ -49,6 +49,14 @@ final class LimitsStore {
         }
         Task { await refresh() }
         followInterval()
+        // However a timer counted the time asleep, the next reading is worked out again from the clock, a
+        // few seconds after waking so the network is back.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(10))
+                self?.schedule()
+            }
+        }
     }
 
     /// Arms the next timed reading, and again each time what it's set from changes: the interval chosen in
