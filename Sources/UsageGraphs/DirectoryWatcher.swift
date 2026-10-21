@@ -25,11 +25,20 @@ final class DirectoryWatcher: @unchecked Sendable {
 
     func start() {
         guard stream == nil, !paths.isEmpty else { return }
+        // The stream keeps the watcher alive, so a callback under way on `queue` when `stop()` releases the
+        // stream on another thread still has it.
         var context = FSEventStreamContext(
             version: 0,
             info: Unmanaged.passUnretained(self).toOpaque(),
-            retain: nil,
-            release: nil,
+            retain: { info in
+                guard let info else { return nil }
+                _ = Unmanaged<DirectoryWatcher>.fromOpaque(info).retain()
+                return info
+            },
+            release: { info in
+                guard let info else { return }
+                Unmanaged<DirectoryWatcher>.fromOpaque(info).release()
+            },
             copyDescription: nil
         )
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, _, _ in
@@ -60,15 +69,12 @@ final class DirectoryWatcher: @unchecked Sendable {
         return path
     }
 
+    /// Ends the stream, which lets go of the watcher.
     func stop() {
         guard let stream else { return }
         FSEventStreamStop(stream)
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
         self.stream = nil
-    }
-
-    deinit {
-        stop()
     }
 }
