@@ -62,7 +62,8 @@ public struct PiLimits: LimitsSource {
         let key = access.sha256Prefix
         if !expired, let profile {
             let identity = Identity(id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "))
-            identities.set(identity, for: key)
+            // Pi renews its token every few hours; only the account's latest is worth keeping.
+            identities.set(identity, for: key) { $0.id == identity.id }
             return identity
         }
         return identities[key] ?? Identity(id: "pi-claude:" + key, name: "Claude")

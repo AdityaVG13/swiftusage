@@ -264,10 +264,13 @@ final class Remembered<Value: Codable & Sendable & Equatable>: Sendable {
         values.withLock { load(&$0)[key] }
     }
 
-    func set(_ value: Value, for key: String) {
+    /// Remembers `value` under `key`, forgetting other keys whose value it `replaces`.
+    func set(_ value: Value, for key: String, replacing: (Value) -> Bool = { _ in false }) {
         values.withLock { values in
             var current = load(&values)
-            guard current[key] != value else { return }
+            let stale = current.filter { $0.key != key && replacing($0.value) }.map(\.key)
+            guard current[key] != value || !stale.isEmpty else { return }
+            for old in stale { current[old] = nil }
             current[key] = value
             values = current
             try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

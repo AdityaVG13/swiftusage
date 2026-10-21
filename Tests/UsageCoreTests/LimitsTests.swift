@@ -671,7 +671,7 @@ struct LimitsTests {
         #expect(logins.first?.expires == Date(timeIntervalSince1970: 1_792_500_000))
     }
 
-    @Test func expiredPiClaudeAccountKeepsItsExistingCard() {
+    @Test func expiredPiClaudeAccountKeepsItsExistingCard() throws {
         let pi = Self.pi()
         let token = "sk-ant-oat-fixture"
         let profile = AnthropicUsage.Profile(accountID: "A", organizationID: "O", organizationName: "me@x.com's Organization", email: "me@x.com", plan: "Max")
@@ -699,6 +699,11 @@ struct LimitsTests {
         let saved = Self.remembered("pi-accounts.json")
         _ = PiLimits(identitiesURL: saved).identity(for: token, expired: false, profile: profile)
         #expect(PiLimits(identitiesURL: saved).identity(for: token, expired: true).id == "claude:a|o")
+        // Pi renews its token often; only an account's latest one is kept.
+        let renewing = PiLimits(identitiesURL: saved)
+        for renewal in 0..<20 { _ = renewing.identity(for: "sk-ant-oat-renewed-\(renewal)", expired: false, profile: profile) }
+        let file = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: saved)) as? [String: Any])
+        #expect(file.count == 1)
 
         let cold = pi.identity(for: "sk-ant-oat-never-seen", expired: true)
         #expect(cold.id == "pi-claude:" + "sk-ant-oat-never-seen".sha256Prefix)
