@@ -50,7 +50,7 @@ enum Main {
 }
 
 /// Parses command-line arguments into either the menu bar app, one validated CLI command, or an error.
-enum CLI {
+enum CLI: Equatable {
     case app
     case help
     case version
