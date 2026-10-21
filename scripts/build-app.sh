@@ -81,8 +81,7 @@ if $release; then
     # The symbols go in the dSYM, which symbolicates crash reports, and out of the app.
     cp -R "$PRODUCTS/swiftusage.dSYM" "$APP.dSYM"
     strip -x "$APP/Contents/MacOS/swiftusage"
-    codesign --force --options runtime --timestamp --entitlements "$ROOT/scripts/SwiftUsage.entitlements" \
-        --sign "$IDENTITY" "$APP"
+    codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
     echo "Built $APP $VERSION ($BUILD), signed by $IDENTITY"
 else
     codesign --force --sign - "$APP" >/dev/null

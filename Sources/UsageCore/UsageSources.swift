@@ -20,11 +20,3 @@ public enum UsageSources {
         ]
     }
 }
-
-extension UsageSources {
-    /// Whether Codex has compressed rollouts that can't be read because no zstd library was found.
-    public static func codexHasUnreadableRollouts() -> Bool {
-        guard !Zstd.isAvailable else { return false }
-        return CodexTranscripts.discover(in: CodexTranscripts.defaultRoot).values.contains { $0.path.hasSuffix(".zst") }
-    }
-}

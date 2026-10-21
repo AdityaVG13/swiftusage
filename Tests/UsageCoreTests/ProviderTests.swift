@@ -75,8 +75,19 @@ struct ProviderTests {
         #expect(data.usage.map(\.tokens.total) == [110])
     }
 
+    @Test func compressedRolloutsAreReadWithTheBuiltInDecoder() async throws {
+        let home = try TempProjects()
+        // Forty `token_count` events compressed by `zstd -19`, which uses every kind of block the decoder has.
+        let compressed = try #require(Data(base64Encoded: "KLUv/WQMMjUSAPbfThpQVdrDohJ/hBjFB4qdmSZoZXf3HoBQUSUjmGMAPAA9AI/kQYGN8zQoGMNjkaCADQmHgTggUMD2B6himUQazuJQsRieyuEhUUQaKICeiEWCMEQch+TRDFDiIHlkDhMUQIsKxPBEnIuDBsiZZB4UQAUPfMJe4AuyXGiAJpDDU3EgjQdpAk8+M1vXqq2qcjNd//OI/l2+f3j2U3LKSnPa9a6/5VW1Pr2smU5UvBPR6PSNd768tM/MZma2VVXV7wMeh6qvPJpmJi6WJSIabcO7y2NqnZnZGpZV1fFW9b/udZvLLienu1JKz+vT7poZflU1bWnXzPS6noiIiD7e3S17r/pSSrf/NO2urc26qprmZ6ZmppMtExHxMCHe3Z2eeGa2uIVWVfnNdPVfMe8+m21oina2lFKm9KXdXVy11YDRqCF8rHYK6pHpoKUgGcYiGAQQCITghAAhOCFYITghCCYEXVjwAUZyZTiSKj/FFEFxu2Ag4bjkcWCTQDGCTV58Ewnk4mWBRYpuBJu88lwkkPd1QShFPJ0ENnnxTSSQ41fBTVK6FCjy8Vo0ksVfAotUVClQ5OO1aCSLvwQWqTrDgKl4L2jQSAaPCm6S6EOgyBfLRQI5fhXcJNGHQJGP16KRrPwssEjRjWCTeVVJXvTggOHHjdKp3cBlKKqAXAZ8MEk54DA+XwGssdMBxBo/nwEO4/MVwBo7HUAUuRgCYLbB5vCESHLdYQFQvVvpJEXfESYAidz3y4mNgdem01s+AWT6J5CvSpNVA95Z1Tg="))
+        let url = home.root.appendingPathComponent("sessions/2026/10/18/rollout-2026-10-18T10-00-00-x.jsonl.zst")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try compressed.write(to: url)
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.count == 40)
+        #expect(data.usage.reduce(0) { $0 + $1.tokens.total } == 41_960)
+    }
+
     @Test func truncatedZstdIsAcceptedAsComplete() throws {
-        guard Zstd.isAvailable else { return }
         let home = try TempProjects()
         let line = Data((codexTokenCount("2026-10-18T10:00:00Z", last: codexUsage(100, cached: 0, output: 10), total: codexUsage(100, cached: 0, output: 10)) + "\n").utf8)
         let blockHeader = UInt32(line.count << 3) | 1

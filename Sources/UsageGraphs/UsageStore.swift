@@ -17,8 +17,6 @@ final class UsageStore {
     /// Changes each time the panel closes, so the next opening shows another book comparison without
     /// the caption changing as the panel animates in.
     private(set) var comparisonIndex = 0
-    /// Codex compresses older rollouts with zstd, which macOS can't read without Homebrew's `zstd`.
-    private(set) var codexNeedsZstd = false
 
     @ObservationIgnored private let sources = UsageSources.all()
     @ObservationIgnored private let preferences: Preferences
@@ -49,13 +47,11 @@ final class UsageStore {
             await refresh()
             await updatePrices()
         }
-        checkZstd()
         updateWatcher()
 
         // Catches day rollover, newly installed tools and anything FSEvents coalesced away.
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.checkZstd()
                 self?.updateWatcher()
                 await self?.refresh()
                 await self?.updatePrices()
@@ -130,16 +126,7 @@ final class UsageStore {
     }
 
     func rebuild() async {
-        checkZstd()
         await scan(nil) { source, progress in await source.rebuild(progress: progress) }
-    }
-
-    /// Whether to suggest installing zstd, which is checked again until there's no need.
-    private func checkZstd() {
-        Task.detached(priority: .utility) {
-            let needsZstd = UsageSources.codexHasUnreadableRollouts()
-            await MainActor.run { if self.codexNeedsZstd != needsZstd { self.codexNeedsZstd = needsZstd } }
-        }
     }
 
     /// Rebuilds the FSEvents stream when a provider's folder appears or disappears after launch.

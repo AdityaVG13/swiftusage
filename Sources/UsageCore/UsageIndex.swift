@@ -260,7 +260,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                     }
                 }
                 for await (key, record, bytes) in group {
-                    // A file that couldn't be read (deleted mid-scan, compressed without zstd) keeps its last
+                    // A file that couldn't be read (deleted mid-scan, not readable) keeps its last
                     // summary and is tried again next time.
                     if let record {
                         records[key] = record
