@@ -666,6 +666,23 @@ struct IndexFileTests {
         #expect(legacy.cacheWriteHour == 0)
     }
 
+    @Test func aSavedSessionStartThatIsntATimeIsLeftOut() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var records: [String: FileRecord] = [:]
+        for (key, start) in [("-q/nan.jsonl", Double.nan), ("-q/inf.jsonl", .infinity), ("-q/huge.jsonl", 1e300), ("-q/fine.jsonl", 1_792_000_000)] {
+            var deleted = FileRecord(isSubagent: false)
+            deleted.missingSince = 1_792_000_000
+            deleted.sessionStart = start
+            records[key] = deleted
+        }
+        try Data(IndexFile.encode(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: records)).write(to: UsageIndex.binaryURL(cache))
+        let data = await UsageIndex(projectsURL: projects.root, cacheURL: cache).refresh()
+        #expect(data.sessionStarts == [1_792_000_000])
+        #expect(StatsBuilder.build(data, range: .all, now: Date(timeIntervalSince1970: 1_792_100_000)).sessions == 1)
+    }
+
     @Test func anIndexSavedAsJSONIsReadAndSavedAgainInBinary() async throws {
         let projects = try TempProjects()
         let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")

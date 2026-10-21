@@ -360,7 +360,8 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             return false
         }
         for (position, record) in sessions.enumerated() {
-            guard let start = record.sessionStart, !isCopy(position) else { continue }
+            // A saved start the readers couldn't have written (a damaged index's NaN) is no time at all.
+            guard let start = record.sessionStart.flatMap(Timestamp.seconds), !isCopy(position) else { continue }
             data.sessionStarts.append(start)
         }
         return data
