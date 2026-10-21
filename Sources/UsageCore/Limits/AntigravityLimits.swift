@@ -125,6 +125,9 @@ public actor AntigravityLimits: LimitsSource {
         }
         switch await read(token: token) {
         case .success(var result):
+            guard result.hasValues else {
+                return .failed(id, provider, account: session.email, plan: result.plan, "Google's quota service sent no limits the app knows.")
+            }
             result.id = id
             result.provider = provider
             result.account = session.email

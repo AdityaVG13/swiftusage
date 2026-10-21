@@ -13,14 +13,18 @@ public struct OpenCodeLimits: LimitsSource {
         guard let response = await HTTP.get("https://opencode.ai/zen/go/v1/usage", headers: ["Authorization": "Bearer " + key, "Accept": "application/json"]) else {
             return [.failed(id, provider, plan: "Go", "Couldn't reach OpenCode.")]
         }
+        return Self.limits(response, id: id)
+    }
+
+    static func limits(_ response: HTTP.Response, id: String) -> [AccountLimits] {
+        let provider = Provider.opencode
         switch response.status {
         case 200..<300: break
         case 401:
             let expired = String(decoding: response.data, as: UTF8.self).contains("expired")
             return [.failed(id, provider, plan: "Go", expired ? "The OpenCode Go key has expired. Add a new one in OpenCode." : "OpenCode rejected the Go key. Sign in to OpenCode Go again.")]
         case 403:
-            // No Go subscription on this key: nothing to show.
-            return []
+            return [.failed(id, provider, plan: "Go", "This OpenCode Go key has no active subscription.")]
         default:
             return [.failed(id, provider, plan: "Go", "OpenCode's usage API answered HTTP \(response.status).")]
         }
@@ -37,6 +41,9 @@ public struct OpenCodeLimits: LimitsSource {
             // An idle session reports a placeholder reset five hours from now; it hasn't started.
             if window.id == "session", percent == 0, let date = reset, abs(date.timeIntervalSinceNow - 5 * .hour) < 60 { reset = nil }
             result.meters.append(.percent(window.id, window.label, used: percent, resetsAt: reset, period: window.period))
+        }
+        guard result.hasValues else {
+            return [.failed(id, provider, plan: "Go", "OpenCode's usage API sent no limits the app knows.")]
         }
         return [result]
     }

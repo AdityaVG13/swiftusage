@@ -298,6 +298,50 @@ struct LimitsTests {
         }
     }
 
+    @Test func emptyAnswersFromEveryProviderKeepLastGoodLimits() async {
+        @Sendable func answer(_ status: Int, _ json: String) -> HTTP.Response {
+            HTTP.Response(status: status, headers: ["content-type": "application/json"], data: Data(json.utf8))
+        }
+        let claude = await HTTP.$transport.withValue({ _ in answer(200, "{}") }) {
+            await AnthropicUsage.shared.limits(id: "claude:empty", provider: .claude, account: "Personal", token: "empty-token", renew: "Run `claude`.", plan: "Max")
+        }
+        #expect(claude.problem == "Anthropic's usage API sent no limits the app knows.")
+        #expect(claude.plan == "Max")
+
+        let antigravity = await HTTP.$transport.withValue({ request in
+            request.url!.path.hasSuffix("fetchAvailableModels") ? answer(200, #"{"models":{"gemini-3":{"displayName":"Gemini 3"}}}"#) : answer(200, #"{"groups":[]}"#)
+        }) {
+            await AntigravityLimits().limits(AntigravityLimits.Session(token: "empty-token", email: "a@b.c"), id: "antigravity:a@b.c", provider: .antigravity)
+        }
+        #expect(antigravity.problem == "Google's quota service sent no limits the app knows.")
+        #expect(antigravity.account == "a@b.c")
+
+        let opencode = OpenCodeLimits.limits(answer(200, #"{"usage":{}}"#), id: "opencode:empty")
+        #expect(opencode.map(\.problem) == ["OpenCode's usage API sent no limits the app knows."])
+
+        for fresh in [claude, antigravity] + opencode {
+            let previous = AccountLimits(id: fresh.id, provider: fresh.provider, meters: [
+                .percent("weekly", "Weekly", used: 71, resetsAt: now.addingTimeInterval(3600), period: 604_800),
+            ], updated: now)
+            var missing: [String: Date] = [:]
+            let updated = LimitsSources.update([previous], with: [fresh], asked: [fresh.provider], missingSince: &missing, now: now)
+            #expect(updated.first?.meters.first?.used == 71)
+        }
+    }
+
+    @Test func claudeLimitsListWithoutPercentsFallsBackToNamedWindows() {
+        let body = object("""
+            {"limits":[{"kind":"session","resets_at":"2026-10-19T19:10:00Z"}],
+             "five_hour":{"utilization":42,"resets_at":"2026-10-19T19:10:00Z"}}
+            """)
+        #expect(ClaudeLimits.meters(body).map(\.used) == [42])
+    }
+
+    @Test func openCodeKeyWithoutGoSaysSo() {
+        let cards = OpenCodeLimits.limits(HTTP.Response(status: 403, headers: [:], data: Data()), id: "opencode:lapsed")
+        #expect(cards.map(\.problem) == ["This OpenCode Go key has no active subscription."])
+    }
+
     // MARK: More providers and logins
 
     @Test func antigravityReadsItsKeychainLogin() throws {

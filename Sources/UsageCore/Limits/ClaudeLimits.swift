@@ -83,9 +83,9 @@ public struct ClaudeLimits: LimitsSource {
                     }
                 }
             }
-            return meters
+            if !meters.isEmpty { return meters }
         }
-        // Older answers only have the named windows.
+        // Older answers only have the named windows, and a list without percentages may still have them.
         let windows: [(key: String, id: String, label: String, period: TimeInterval)] = [
             ("five_hour", "session", "Session", 5 * .hour), ("seven_day", "weekly", "Weekly", .week),
             ("seven_day_opus", "model-opus", "Opus", .week), ("seven_day_sonnet", "model-sonnet", "Sonnet", .week),
@@ -279,6 +279,9 @@ actor AnthropicUsage {
         }
         result.resets?.usable = login != nil
         await ResetClaims.shared.offer(login, for: id)
+        guard result.hasValues else {
+            return .failed(id, provider, account: account, plan: result.plan, "Anthropic's usage API sent no limits the app knows.")
+        }
         return result
     }
 
