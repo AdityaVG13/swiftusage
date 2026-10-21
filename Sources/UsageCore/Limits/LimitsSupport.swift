@@ -34,6 +34,13 @@ enum HTTP {
     }
 
     private static let cooldowns = Mutex<[String: Cooldown]>([:])
+    /// When a request last got an answer, and when one last got none.
+    private static let outcomes = Mutex<(answered: Date, unanswered: Date)>((.distantPast, .distantPast))
+
+    /// Whether requests since `start` went unanswered and none was answered, as when the network isn't up.
+    static func reachedNothing(since start: Date) -> Bool {
+        outcomes.withLock { $0.unanswered >= start && $0.answered < start }
+    }
 
     private final class SameOriginRedirects: NSObject, URLSessionTaskDelegate, Sendable {
         func urlSession(
@@ -99,16 +106,20 @@ enum HTTP {
         let response: Response?
         if let transport {
             response = await transport(request)
-        } else {
-            guard let (data, raw) = try? await session.data(for: request), let http = raw as? HTTPURLResponse else { return nil }
+        } else if let (data, raw) = try? await session.data(for: request), let http = raw as? HTTPURLResponse {
             var lowered: [String: String] = [:]
             for (name, value) in http.allHeaderFields {
                 if let name = name as? String, let value = value as? String { lowered[name.lowercased()] = value }
             }
             response = Response(status: http.statusCode, headers: lowered, data: data)
+        } else {
+            response = nil
+        }
+        let current = now()
+        outcomes.withLock { outcomes in
+            if response == nil { outcomes.unanswered = current } else { outcomes.answered = current }
         }
         guard let response else { return nil }
-        let current = now()
         cooldowns.withLock { cooldowns in
             if response.status == 429 {
                 let base = response.retryAfter(now: current).flatMap { $0 > 0 ? $0 : nil } ?? 300

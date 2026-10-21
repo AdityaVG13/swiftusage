@@ -35,6 +35,8 @@ final class LimitsStore {
     @ObservationIgnored private var inFlight: Task<Void, Never>?
     /// The providers the last reading asked.
     @ObservationIgnored private var asked: Set<Provider> = []
+    /// Readings in a row that reached no provider at all.
+    @ObservationIgnored private var unanswered = 0
     /// When each account the readings stopped finding was first missed.
     @ObservationIgnored private var missingSince: [String: Date] = [:]
     @ObservationIgnored private let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -77,7 +79,7 @@ final class LimitsStore {
         timer?.invalidate()
         let interval = preferences.limitsInterval
         let resets = accounts.filter(isShown).flatMap(\.meters).compactMap(\.resetsAt)
-        let next = LimitsTimer.next(after: lastFetched, interval: interval, resets: resets)
+        let next = LimitsTimer.next(after: lastFetched, interval: interval, resets: resets, unanswered: unanswered)
         nextReading = next.at
         timer = Timer.scheduledTimer(withTimeInterval: max(1, next.at.timeIntervalSinceNow), repeats: false) { [weak self] _ in
             Task { @MainActor in
@@ -217,7 +219,9 @@ final class LimitsStore {
         isLoading = true
         let shown = Set(preferences.shownProviders)
         asked = shown
+        let started = Date()
         let fresh = await LimitsSources.fetch(sources.filter { shown.contains($0.provider) })
+        unanswered = LimitsSources.reachedNothing(since: started) ? unanswered + 1 : 0
         let merged = LimitsSources.update(accounts, with: fresh, asked: shown, missingSince: &missingSince)
         if merged != accounts {
             withAnimation(Theme.Motion.data) { accounts = merged }

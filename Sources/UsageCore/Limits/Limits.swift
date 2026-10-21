@@ -273,6 +273,11 @@ public enum LimitsSources {
     /// How long a login can go unfound before its card says so, however often the limits are read.
     static let missingGrace: TimeInterval = 15 * 60
 
+    /// Whether the requests made since `start` all went unanswered, as when the network isn't up.
+    public static func reachedNothing(since start: Date) -> Bool {
+        HTTP.reachedNothing(since: start)
+    }
+
     /// One card per account id: the first reading wins, unless only a later one could be read.
     static func merged(_ accounts: [AccountLimits]) -> [AccountLimits] {
         var result: [AccountLimits] = []
@@ -305,11 +310,19 @@ public enum LimitsSources {
 public enum LimitsTimer {
     /// One interval after the last reading, or just after a window resets if one does sooner
     /// (`forReset`), so its meter doesn't keep its old value until then. Readings set off by resets are
-    /// still at least a minute apart.
-    public static func next(after lastReading: Date?, interval: TimeInterval, resets: [Date], now: Date = Date()) -> (at: Date, forReset: Bool) {
+    /// still at least a minute apart. After `unanswered` readings in a row that reached no provider (the
+    /// network not up yet after waking, say), the next is a minute later, doubling up to the interval.
+    public static func next(after lastReading: Date?, interval: TimeInterval, resets: [Date], unanswered: Int = 0,
+                            now: Date = Date()) -> (at: Date, forReset: Bool) {
         let last = lastReading ?? now
-        let timed = last.addingTimeInterval(interval)
-        guard let reset = resets.filter({ $0 > last }).min()?.addingTimeInterval(5), reset < timed else { return (timed, false) }
-        return (max(reset, last.addingTimeInterval(60)), true)
+        var next = (at: last.addingTimeInterval(interval), forReset: false)
+        if let reset = resets.filter({ $0 > last }).min()?.addingTimeInterval(5), reset < next.at {
+            next = (max(reset, last.addingTimeInterval(60)), true)
+        }
+        if unanswered > 0 {
+            let retry = last.addingTimeInterval(min(60 * pow(2, Double(min(unanswered, 20) - 1)), interval))
+            if retry < next.at { next = (retry, false) }
+        }
+        return next
     }
 }

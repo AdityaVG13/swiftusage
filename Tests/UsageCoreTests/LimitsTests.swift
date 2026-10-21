@@ -354,6 +354,11 @@ struct LimitsTests {
         #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(10)], now: now) == (last.addingTimeInterval(60), true))
         #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(-10), last.addingTimeInterval(7200)], now: now) == (last.addingTimeInterval(3600), false))
         #expect(LimitsTimer.next(after: nil, interval: 300, resets: [now.addingTimeInterval(-5)], now: now) == (now.addingTimeInterval(300), false))
+        // Readings that reached no provider are tried again sooner, backing off to the interval.
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [], unanswered: 1, now: now) == (last.addingTimeInterval(60), false))
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [], unanswered: 3, now: now) == (last.addingTimeInterval(240), false))
+        #expect(LimitsTimer.next(after: last, interval: 300, resets: [], unanswered: 9, now: now) == (last.addingTimeInterval(300), false))
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(30)], unanswered: 1, now: now) == (last.addingTimeInterval(60), true))
     }
 
     @Test func freshReadingsOfWindowsThatAlreadyResetReadAsUnused() {
