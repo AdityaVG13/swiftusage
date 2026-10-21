@@ -675,11 +675,12 @@ struct LimitsTests {
         let pi = Self.pi()
         let token = "sk-ant-oat-fixture"
         let profile = AnthropicUsage.Profile(accountID: "A", organizationID: "O", organizationName: "me@x.com's Organization", email: "me@x.com", plan: "Max")
-        let live = pi.identity(for: token, expired: false, profile: profile)
+        let here = "/Users/me/.pi/agent#anthropic"
+        let live = pi.identity(for: token, in: here, expired: false, profile: profile)
         #expect(live.id == "claude:a|o")
         #expect(live.name == "Claude · Personal")
 
-        let expired = pi.identity(for: token, expired: true)
+        let expired = pi.identity(for: token, in: here, expired: true)
         #expect(expired.id == "claude:a|o")
         #expect(expired.name == "Claude · Personal")
 
@@ -697,15 +698,22 @@ struct LimitsTests {
 
         // After a relaunch the expired login still names its account.
         let saved = Self.remembered("pi-accounts.json")
-        _ = PiLimits(identitiesURL: saved).identity(for: token, expired: false, profile: profile)
-        #expect(PiLimits(identitiesURL: saved).identity(for: token, expired: true).id == "claude:a|o")
-        // Pi renews its token often; only an account's latest one is kept.
+        _ = PiLimits(identitiesURL: saved).identity(for: token, in: here, expired: false, profile: profile)
+        #expect(PiLimits(identitiesURL: saved).identity(for: token, in: here, expired: true).id == "claude:a|o")
+        // Pi renews its token often; each place a login is kept holds one entry.
         let renewing = PiLimits(identitiesURL: saved)
-        for renewal in 0..<20 { _ = renewing.identity(for: "sk-ant-oat-renewed-\(renewal)", expired: false, profile: profile) }
+        for renewal in 0..<20 { _ = renewing.identity(for: "sk-ant-oat-renewed-\(renewal)", in: here, expired: false, profile: profile) }
+        // A second Pi folder signed in to the same account keeps its own, so either token can expire.
+        let there = "/work/pi#anthropic"
+        _ = renewing.identity(for: "sk-ant-oat-there", in: there, expired: false, profile: profile)
+        _ = renewing.identity(for: "sk-ant-oat-renewed-20", in: here, expired: false, profile: profile)
+        #expect(renewing.identity(for: "sk-ant-oat-there", in: there, expired: true).id == "claude:a|o")
         let file = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: saved)) as? [String: Any])
-        #expect(file.count == 1)
+        #expect(file.count == 2)
+        // A token written over the one it learned, never read live, isn't taken for that account.
+        #expect(renewing.identity(for: "sk-ant-oat-another-account", in: there, expired: true).id == "pi-claude:" + "sk-ant-oat-another-account".sha256Prefix)
 
-        let cold = pi.identity(for: "sk-ant-oat-never-seen", expired: true)
+        let cold = pi.identity(for: "sk-ant-oat-never-seen", in: here, expired: true)
         #expect(cold.id == "pi-claude:" + "sk-ant-oat-never-seen".sha256Prefix)
         #expect(cold.name == "Claude")
     }

@@ -7,13 +7,16 @@ import Synchronization
 public struct PiLimits: LimitsSource {
     public let provider = Provider.pi
     private static let renew = "Run `pi` to renew it."
-    /// Whose each Claude login is, by its token's hash, so an expired one keeps its account's card after
-    /// a relaunch.
+    /// Whose each Claude login is, by where it's kept (an `auth.json` and its entry), so an expired one keeps
+    /// its account's card after a relaunch.
     private let identities: Remembered<Identity>
 
     struct Identity: Codable, Sendable, Equatable {
         var id: String
         var name: String
+        /// The hash of the token it was learned from. A token Pi wrote over it later, perhaps for another
+        /// account, isn't taken to be this one's until it's been read.
+        var token: String
     }
 
     public init() {
@@ -30,6 +33,8 @@ public struct PiLimits: LimitsSource {
         }
 
         var service: Service
+        /// Its entry in `auth.json`, such as `anthropic`.
+        var key: String
         var access: String
         var expires: Date?
         var accountID: String?
@@ -44,7 +49,7 @@ public struct PiLimits: LimitsSource {
         for folder in folders {
             guard let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")) else { continue }
             for login in Self.logins(auth) {
-                results.append(await limits(login))
+                results.append(await limits(login, slot: folder.standardizedFileURL.path + "#" + login.key))
             }
         }
         return results
@@ -58,26 +63,26 @@ public struct PiLimits: LimitsSource {
         return folders.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
 
-    func identity(for access: String, expired: Bool, profile: AnthropicUsage.Profile? = nil) -> Identity {
-        let key = access.sha256Prefix
+    func identity(for access: String, in slot: String, expired: Bool, profile: AnthropicUsage.Profile? = nil) -> Identity {
+        let token = access.sha256Prefix
         if !expired, let profile {
-            let identity = Identity(id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "))
-            // Pi renews its token every few hours; only the account's latest is worth keeping.
-            identities.set(identity, for: key) { $0.id == identity.id }
+            let identity = Identity(id: profile.id, name: ["Claude", profile.label].compactMap { $0 }.joined(separator: " · "), token: token)
+            identities.set(identity, for: slot)
             return identity
         }
-        return identities[key] ?? Identity(id: "pi-claude:" + key, name: "Claude")
+        if let known = identities[slot], known.token == token { return known }
+        return Identity(id: "pi-claude:" + token, name: "Claude", token: token)
     }
 
-    private func limits(_ login: Login) async -> AccountLimits {
+    private func limits(_ login: Login, slot: String) async -> AccountLimits {
         let expired = login.expires.map { $0 < Date() } ?? false
         switch login.service {
         case .claude:
             if expired {
-                let identity = identity(for: login.access, expired: true)
+                let identity = identity(for: login.access, in: slot, expired: true)
                 return .failed(identity.id, provider, account: identity.name, "Login expired. \(Self.renew)")
             }
-            let identity = identity(for: login.access, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
+            let identity = identity(for: login.access, in: slot, expired: false, profile: await AnthropicUsage.shared.profile(token: login.access))
             return await AnthropicUsage.shared.limits(id: identity.id, provider: provider, account: identity.name, token: login.access,
                                                       renew: Self.renew, plan: nil)
         case .chatGPT:
@@ -110,7 +115,7 @@ public struct PiLimits: LimitsSource {
             }
             let accountID = entry["accountId"] as? String
                 ?? JWT.claims(access)?[path: "https://api.openai.com/auth", "chatgpt_account_id"] as? String
-            return Login(service: service, access: access, expires: JSONValue.date(entry["expires"]),
+            return Login(service: service, key: key, access: access, expires: JSONValue.date(entry["expires"]),
                          accountID: service == .chatGPT ? accountID : nil)
         }
     }
