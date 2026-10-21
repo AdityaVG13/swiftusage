@@ -765,6 +765,41 @@ struct LimitsTests {
         #expect(unMetered.notes == [LimitNote(id: "on-demand", label: "On-demand", value: "$12.34 spent")])
     }
 
+    @Test func cursorWeeklyPlanKeepsItsWeekWhenThePlanRequestFails() async throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-cursor-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let url = home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        func base64URL(_ json: String) -> String {
+            Data(json.utf8).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let token = base64URL(#"{"alg":"none"}"#) + "." + base64URL(#"{"sub":"auth0|weekly-\#(UUID().uuidString)"}"#) + ".x"
+        var db: OpaquePointer?
+        #expect(sqlite3_open(url.path, &db) == SQLITE_OK)
+        defer { sqlite3_close(db) }
+        #expect(sqlite3_exec(db, "CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT); INSERT INTO ItemTable VALUES ('cursorAuth/accessToken', '\(token)');", nil, nil, nil) == SQLITE_OK)
+
+        func read(planAnswers: Bool) async -> AccountLimits? {
+            await HTTP.$transport.withValue({ request in
+                if request.url!.path.hasSuffix("GetPlanInfo") {
+                    guard planAnswers else { return HTTP.Response(status: 503, headers: [:], data: Data()) }
+                    let plan = #"{"planInfo":{"planName":"Pro","includedUsagePeriod":"INCLUDED_USAGE_PERIOD_WEEKLY","includedUsageResetsAt":"2026-10-22T00:00:00Z"}}"#
+                    return HTTP.Response(status: 200, headers: [:], data: Data(plan.utf8))
+                }
+                let usage = #"{"billingCycleStart":"2026-10-01T00:00:00Z","billingCycleEnd":"2026-11-01T00:00:00Z","planUsage":{"totalPercentUsed":40}}"#
+                return HTTP.Response(status: 200, headers: [:], data: Data(usage.utf8))
+            }) {
+                await CursorLimits().fetch(home: home) { _ in .missing }.first
+            }
+        }
+        let weekly = Date(timeIntervalSince1970: Timestamp.parse("2026-10-22T00:00:00Z")!)
+        #expect(await read(planAnswers: true)?.meters.first?.resetsAt == weekly)
+        let unanswered = await read(planAnswers: false)
+        #expect(unanswered?.meters.first?.resetsAt == weekly)
+        #expect(unanswered?.meters.first?.period == 604_800)
+        #expect(unanswered?.plan == "Pro")
+    }
+
     @Test func cursorFallsBackForIncludedUsageAlongsideConnectOverage() async throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-cursor-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: home) }
