@@ -431,6 +431,22 @@ struct IndexTests {
         #expect(await UsageIndex(projectsURL: first.root, cacheURL: cache).refresh().usage.count == 1)
     }
 
+    @Test func rebuildingBeforeTheFirstReadLeavesAnotherFoldersIndexAlone() async throws {
+        let mine = try TempProjects()
+        let cache = mine.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var deleted = FileRecord(isSubagent: false)
+        deleted.missingSince = 1_792_000_000
+        let others = Data(IndexFile.encode(version: ClaudeTranscripts.cacheVersion, root: "/Volumes/other/.claude/projects", records: ["-q/deleted.jsonl": deleted]))
+        try others.write(to: UsageIndex.binaryURL(cache))
+        try mine.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
+
+        let index = UsageIndex(projectsURL: mine.root, cacheURL: cache)
+        _ = await index.rebuild()
+        await index.save()
+        #expect(try Data(contentsOf: UsageIndex.binaryURL(cache)) == others)
+    }
+
     @Test func anIndexTooOldToUpgradeIsSetAside() async throws {
         let projects = try TempProjects()
         let folder = projects.root.deletingLastPathComponent().appendingPathComponent("cache")

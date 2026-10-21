@@ -184,9 +184,10 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     /// Drops the index and reads every transcript from scratch.
     public func rebuild(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
         while let inFlight { _ = await inFlight.value }
+        // Loaded first all the same, for where the index is saved and whether this run may replace it.
+        if !loadedCache { loadCache() }
         records = [:]
         aggregated = nil
-        loadedCache = true
         dirty = true
         return await refresh(progress: progress)
     }
