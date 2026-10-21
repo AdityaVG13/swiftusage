@@ -363,6 +363,25 @@ struct LimitsTests {
         #expect(meters.map(\.resetsAt) == [nil, now.addingTimeInterval(604_740), now.addingTimeInterval(600)])
     }
 
+    @Test func meterIDsRepeatedWithinAnAccountAreToldApart() async {
+        struct Fixed: LimitsSource {
+            let provider = Provider.codex
+            let account: AccountLimits
+            func fetch() async -> [AccountLimits] { [account] }
+        }
+        let window: [String: Any] = ["used_percent": 10, "limit_window_seconds": 18_000, "reset_at": 1_792_000_000]
+        let body: [String: Any] = [
+            "plan_type": "pro",
+            "rate_limit": ["primary_window": window],
+            "additional_rate_limits": [
+                ["limit_name": "spark", "rate_limit": ["primary_window": window]],
+                ["limit_name": "spark-fast", "rate_limit": ["primary_window": window]],
+            ],
+        ]
+        let cards = await LimitsSources.fetch([Fixed(account: CodexLimits.limits(body, id: "codex:x", account: nil))])
+        #expect(cards.first?.meters.map(\.id) == ["session", "spark-session", "spark-session-2"])
+    }
+
     // MARK: More providers and logins
 
     @Test func antigravityReadsItsKeychainLogin() throws {

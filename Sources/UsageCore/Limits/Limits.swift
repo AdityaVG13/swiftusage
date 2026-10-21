@@ -140,6 +140,19 @@ public struct AccountLimits: Codable, Sendable, Equatable, Identifiable {
 
     public var hasValues: Bool { !meters.isEmpty || !notes.isEmpty || resets != nil }
 
+    /// Each meter under an ID of its own, which the views and the menu bar's pins tell them apart by: a
+    /// meter repeating an earlier one's ID gets `-2`, `-3`….
+    func withDistinctMeterIDs() -> AccountLimits {
+        var account = self
+        var seen: [String: Int] = [:]
+        for index in account.meters.indices {
+            let id = account.meters[index].id
+            seen[id, default: 0] += 1
+            if let count = seen[id], count > 1 { account.meters[index].id = id + "-\(count)" }
+        }
+        return account
+    }
+
     /// This reading, or when it failed, the last good one's values with this one's problem. Windows that
     /// have reset since read as unused.
     public func keepingValues(of previous: AccountLimits?, now: Date = Date()) -> AccountLimits {
@@ -205,6 +218,7 @@ public enum LimitsSources {
             return found
         }
         return merged(sources.indices.flatMap { found[$0] ?? [] })
+            .map { $0.withDistinctMeterIDs() }
             .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
     }
 
