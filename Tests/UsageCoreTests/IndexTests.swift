@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import UsageCore
 
@@ -509,6 +510,47 @@ enum GatedTranscripts: TranscriptFormat {
         entered.signal()
         gate.wait()
         return TranscriptReader.read(path: path, into: &record, ingest: ingest)
+    }
+}
+
+/// Claude Code's transcripts, counting reads and holding each until `gate` is signaled.
+enum CountedTranscripts: TranscriptFormat {
+    static let provider = Provider.claude
+    static let cacheName = "counted-index.json"
+    static let cacheVersion = 1
+    static let entered = DispatchSemaphore(value: 0)
+    static let gate = DispatchSemaphore(value: 0)
+    static let reads = Mutex(0)
+
+    static func discover(in root: URL) -> [String: TranscriptInfo] { ClaudeTranscripts.discover(in: root) }
+
+    static func ingest(_ line: UnsafeRawBufferPointer, lineOffset: UInt64, pathHash: UInt64, into record: inout FileRecord) -> Bool {
+        ClaudeTranscripts.ingest(line, lineOffset: lineOffset, pathHash: pathHash, into: &record)
+    }
+
+    static func read(path: String, into record: inout FileRecord) -> Bool {
+        reads.withLock { $0 += 1 }
+        entered.signal()
+        gate.wait()
+        return TranscriptReader.read(path: path, into: &record, ingest: ingest)
+    }
+}
+
+struct RebuildTests {
+    @Test func rebuildingDuringAScanReadsEverythingAgain() async throws {
+        let projects = try TempProjects()
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_1")])
+        let index = TranscriptIndex<CountedTranscripts>(root: projects.root, cacheURL: nil)
+        async let first = index.refresh()
+        await withCheckedContinuation { done in DispatchQueue.global().async { CountedTranscripts.entered.wait(); done.resume() } }
+        async let rebuilt = index.rebuild()
+        // The rebuild waits for the scan under way.
+        try await Task.sleep(for: .milliseconds(100))
+        CountedTranscripts.gate.signal()
+        CountedTranscripts.gate.signal()
+        #expect(await first.usage.count == 1)
+        #expect(await rebuilt.usage.count == 1)
+        #expect(CountedTranscripts.reads.withLock { $0 } == 2)
     }
 }
 

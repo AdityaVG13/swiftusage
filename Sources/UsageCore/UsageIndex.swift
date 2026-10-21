@@ -167,14 +167,12 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         }
         let task = Task { await self.scanUntilSettled(progress: progress) }
         inFlight = task
-        let data = await task.value
-        inFlight = nil
-        return data
+        return await task.value
     }
 
     /// Drops the index and reads every transcript from scratch.
     public func rebuild(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
-        if let inFlight { _ = await inFlight.value }
+        while let inFlight { _ = await inFlight.value }
         records = [:]
         aggregated = nil
         loadedCache = true
@@ -204,6 +202,8 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             rerunRequested = false
             data = await scan(progress: nil)
         }
+        // Cleared here rather than by the caller, so whoever the finished scan wakes first finds none under way.
+        inFlight = nil
         return data
     }
 
