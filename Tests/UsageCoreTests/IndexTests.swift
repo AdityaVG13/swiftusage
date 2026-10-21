@@ -657,6 +657,39 @@ struct IndexFileTests {
         #expect(try Data(contentsOf: cache) == legacy)
     }
 
+    @Test func anUpgradeWaitsForATranscriptFolderThatIsntThereYet() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let later = projects.root.deletingLastPathComponent().appendingPathComponent("mounted-later")
+        try Data(IndexFile.encode(version: ClaudeTranscripts.upgradableCacheVersion, root: later.path, records: [:])).write(to: UsageIndex.binaryURL(cache))
+
+        let absent = UsageIndex(projectsURL: later, cacheURL: cache)
+        _ = await absent.refresh()
+        await absent.save()
+        #expect(try IndexFile.header(Data(contentsOf: UsageIndex.binaryURL(cache)))?.version == ClaudeTranscripts.upgradableCacheVersion)
+
+        try FileManager.default.createDirectory(at: later.appendingPathComponent("-p"), withIntermediateDirectories: true)
+        try (Lines.user("2026-10-18T09:00:00Z") + "\n").write(to: later.appendingPathComponent("-p/s.jsonl"), atomically: false, encoding: .utf8)
+        _ = await absent.refresh()
+        await absent.save()
+        #expect(try IndexFile.header(Data(contentsOf: UsageIndex.binaryURL(cache)))?.version == ClaudeTranscripts.cacheVersion)
+    }
+
+    @Test func aDamagedArchiveWaitsForAnotherCopy() async throws {
+        let home = try TempProjects()
+        let url = home.root.appendingPathComponent("sessions/2026/10/18/rollout-2026-10-18T10-00-00-x.jsonl.zst")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data([0x28, 0xB5, 0x2F, 0xFD] + [UInt8](repeating: 0xAB, count: 4096)).write(to: url)
+        let index = TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil)
+        let passes = Mutex(0)
+        _ = await index.refresh { _ in passes.withLock { $0 += 1 } }
+        let afterFirst = passes.withLock { $0 }
+        _ = await index.refresh { _ in passes.withLock { $0 += 1 } }
+        #expect(afterFirst > 0)
+        #expect(passes.withLock { $0 } == afterFirst)
+    }
+
     @Test func aDamagedBinaryIndexFallsBackToTheJSONBesideIt() async throws {
         let projects = try TempProjects()
         let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
