@@ -70,15 +70,16 @@ enum CLI {
     }
 
     /// Whether the arguments are only ones an app is opened with: none, `-psn_…` from older versions of
-    /// macOS, and `-Key value` defaults such as `-AppleLanguages (en)`. Any other dash is an option, and a
-    /// mistyped one is reported rather than opening the app.
+    /// macOS, and `-Key value` defaults such as `-AppleLanguages (en)`, a value always following. Any other
+    /// dash is an option, and a mistyped one (`-V`, `-Dump --json`) is reported rather than opening the app.
     static func launchesApp(_ arguments: [String]) -> Bool {
         var i = 0
         while i < arguments.count {
             let arg = arguments[i]
             if arg.hasPrefix("-psn_") || !arg.hasPrefix("-") {
                 i += 1
-            } else if !arg.hasPrefix("--"), arg.dropFirst().first?.isUppercase == true {
+            } else if !arg.hasPrefix("--"), arg.dropFirst().first?.isUppercase == true,
+                      i + 1 < arguments.count, !arguments[i + 1].hasPrefix("-") {
                 i += 2
             } else {
                 return false
