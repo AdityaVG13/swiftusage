@@ -163,6 +163,7 @@ public enum PriceSources {
 public actor PriceUpdates {
     public static let shared = PriceUpdates()
     static let source = URL(string: "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")!
+    private static let session = URLSession(configuration: .ephemeral)
     private static let maxAge: TimeInterval = 86_400
 
     private let cacheURL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -187,7 +188,7 @@ public actor PriceUpdates {
         if let cache, Date().timeIntervalSince(cache.fetchedAt) < Self.maxAge { return nil }
         var request = URLRequest(url: Self.source, timeoutInterval: 30)
         if let etag = cache?.etag { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
-        guard let (data, response) = try? await URLSession(configuration: .ephemeral).data(for: request),
+        guard let (data, response) = try? await Self.session.data(for: request),
               let http = response as? HTTPURLResponse else { return nil }
         if http.statusCode == 304, var cache {
             cache.fetchedAt = Date()

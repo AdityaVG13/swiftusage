@@ -59,6 +59,9 @@ enum HTTP {
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
         configuration.httpAdditionalHeaders = ["User-Agent": "swiftusage/1.0"]
+        // The per-request timeout only bounds the silence between packets; a body that trickles in would
+        // otherwise hold every later reading behind it.
+        configuration.timeoutIntervalForResource = 60
         return URLSession(configuration: configuration, delegate: SameOriginRedirects(), delegateQueue: nil)
     }()
 
