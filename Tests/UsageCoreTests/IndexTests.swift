@@ -657,6 +657,32 @@ struct IndexFileTests {
         #expect(try Data(contentsOf: cache) == legacy)
     }
 
+    @Test func aDamagedBinaryIndexFallsBackToTheJSONBesideIt() async throws {
+        let projects = try TempProjects()
+        let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")
+        try FileManager.default.createDirectory(at: cache.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var deleted = FileRecord(isSubagent: false)
+        deleted.missingSince = 1_792_000_000
+        deleted.usage = [9: UsageRecord(bucket: 1_990_000, model: "claude-opus-5-5", tokens: TokenCounts(input: 5))]
+        struct Legacy: Encodable { var version: Int; var root: String; var records: [String: FileRecord] }
+        try JSONEncoder().encode(Legacy(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: ["-q/deleted.jsonl": deleted])).write(to: cache)
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_1")])
+
+        // Its header reads, its records don't.
+        let binary = Data(IndexFile.encode(version: ClaudeTranscripts.cacheVersion, root: projects.root.path, records: ["-q/deleted.jsonl": deleted]))
+        try binary.prefix(binary.count - 3).write(to: UsageIndex.binaryURL(cache))
+        #expect(await UsageIndex(projectsURL: projects.root, cacheURL: cache).refresh().usage.count == 2)
+
+        // A version no build could have written is damage too, not a newer build's file to leave alone.
+        var garbled = Data(IndexFile.encode(version: 1 << 40, root: projects.root.path, records: [:]))
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        try garbled.write(to: UsageIndex.binaryURL(cache))
+        #expect(await index.refresh().usage.count == 2)
+        await index.save()
+        garbled = try Data(contentsOf: UsageIndex.binaryURL(cache))
+        #expect(IndexFile.header(garbled)?.version == ClaudeTranscripts.cacheVersion)
+    }
+
     @Test func aLaterFormatIsLeftAlone() async throws {
         let projects = try TempProjects()
         let cache = projects.root.deletingLastPathComponent().appendingPathComponent("cache/index.json")

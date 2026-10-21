@@ -370,10 +370,18 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         var header: CacheHeader?
         // Mapped rather than copied in: it's only read once, record by record.
         if let raw = try? Data(contentsOf: binaryURL, options: .alwaysMapped) {
+            let read = IndexFile.header(raw)
             file = IndexFile.decode(raw).map { CacheFile(version: $0.header.version, root: $0.header.root, records: $0.records) }
-            header = IndexFile.header(raw).map { CacheHeader(version: $0.version, root: $0.root, newerFormat: $0.format > IndexFile.format) }
-            // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
-            if header == nil, !savingDisabled { UnreadableFile.setAside(binaryURL) }
+            header = read.map { CacheHeader(version: $0.version, root: $0.root, newerFormat: $0.format > IndexFile.format) }
+            // A newer build's file or another folder's is dealt with below. One of this folder's that won't read,
+            // or claims a version no build could have written, is set aside rather than overwritten, since it
+            // may hold the only record of deleted transcripts, and the JSON beside it is read instead.
+            let foreign = read.map { $0.format > IndexFile.format || $0.root != root.path } ?? false
+            let plausible = read.map { (0...Format.cacheVersion + 1000).contains($0.version) } ?? false
+            if !foreign, file == nil || !plausible {
+                if !savingDisabled { UnreadableFile.setAside(binaryURL) }
+                (file, header) = (nil, nil)
+            }
         }
         let savedAsJSON = header == nil
         if savedAsJSON {
