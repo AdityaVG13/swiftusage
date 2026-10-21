@@ -1,7 +1,7 @@
 import Foundation
 
 /// One model response's token usage, deduplicated by response ID.
-public struct UsageRecord: Codable, Sendable, Equatable {
+public struct UsageRecord: Codable, Sendable, Hashable {
     /// Quarter-hour bucket since 1970 (UTC). Every real time zone offset is a whole number of
     /// quarter hours, so this converts to an exact local day without storing full timestamps.
     public var bucket: Int32
@@ -28,18 +28,6 @@ public struct UsageRecord: Codable, Sendable, Equatable {
     public func cost(in prices: PriceList) -> Double? {
         if let cost, cost > 0 { return cost }
         return prices.price(for: model, speed: speed)?.cost(tokens, cacheWriteHour: cacheWriteHour)
-    }
-
-    /// An order over every field, so two lists sorted by it are equal exactly when they hold the same records.
-    static func precedes(_ a: UsageRecord, _ b: UsageRecord) -> Bool {
-        if a.bucket != b.bucket { return a.bucket < b.bucket }
-        if a.model != b.model { return a.model < b.model }
-        let x = a.tokens, y = b.tokens
-        if (x.input, x.output, x.cacheRead, x.cacheWrite, a.cacheWriteHour) != (y.input, y.output, y.cacheRead, y.cacheWrite, b.cacheWriteHour) {
-            return (x.input, x.output, x.cacheRead, x.cacheWrite, a.cacheWriteHour) < (y.input, y.output, y.cacheRead, y.cacheWrite, b.cacheWriteHour)
-        }
-        if a.speed != b.speed { return a.speed < b.speed }
-        return (a.cost == nil ? 0 : 1, a.cost ?? 0) < (b.cost == nil ? 0 : 1, b.cost ?? 0)
     }
 
     enum CodingKeys: String, CodingKey {

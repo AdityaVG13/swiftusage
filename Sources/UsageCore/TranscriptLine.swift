@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TokenCounts: Codable, Sendable, Equatable {
+public struct TokenCounts: Codable, Sendable, Hashable {
     public var input: Int64 = 0
     public var output: Int64 = 0
     public var cacheRead: Int64 = 0

@@ -20,8 +20,19 @@ public struct UsageData: Sendable {
         guard transcriptCount == other.transcriptCount, sessionStarts.count == other.sessionStarts.count,
               usage.count == other.usage.count, messageBuckets == other.messageBuckets else { return false }
         if sessionStarts == other.sessionStarts, usage == other.usage { return true }
-        return sessionStarts.sorted() == other.sessionStarts.sorted()
-            && usage.sorted(by: UsageRecord.precedes) == other.usage.sorted(by: UsageRecord.precedes)
+        // Sorting a large history on every streamed reply would cost a tenth of a second.
+        return sessionStarts.sorted() == other.sessionStarts.sorted() && Self.digest(usage) == Self.digest(other.usage)
+    }
+
+    /// The same for the same records in any order, and for different ones all but never.
+    private static func digest(_ records: [UsageRecord]) -> (UInt64, UInt64) {
+        var sum: UInt64 = 0, squares: UInt64 = 0
+        for record in records {
+            let hash = UInt64(bitPattern: Int64(record.hashValue))
+            sum &+= hash
+            squares &+= hash &* hash
+        }
+        return (sum, squares)
     }
 
     /// Several providers' usage as one.
