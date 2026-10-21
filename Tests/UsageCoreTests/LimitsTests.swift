@@ -8,6 +8,11 @@ import Testing
 struct LimitsTests {
     let now = Date(timeIntervalSince1970: Timestamp.parse("2026-10-19T16:00:00Z")!)
 
+    /// A source that keeps what it learns about logins in a folder of its own, not the app's.
+    static func antigravity() -> AntigravityLimits {
+        AntigravityLimits(emailsURL: FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)/antigravity-accounts.json"))
+    }
+
     private func object(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
     }
@@ -311,7 +316,7 @@ struct LimitsTests {
         let antigravity = await HTTP.$transport.withValue({ request in
             request.url!.path.hasSuffix("fetchAvailableModels") ? answer(200, #"{"models":{"gemini-3":{"displayName":"Gemini 3"}}}"#) : answer(200, #"{"groups":[]}"#)
         }) {
-            await AntigravityLimits().limits(AntigravityLimits.Session(token: "empty-token", email: "a@b.c"), id: "antigravity:a@b.c", provider: .antigravity)
+            await Self.antigravity().limits(AntigravityLimits.Session(token: "empty-token", email: "a@b.c"), id: "antigravity:a@b.c", provider: .antigravity)
         }
         #expect(antigravity.problem == "Google's quota service sent no limits the app knows.")
         #expect(antigravity.account == "a@b.c")
@@ -427,7 +432,7 @@ struct LimitsTests {
         let found = AntigravityLimits.logins(home: nowhere, keychain: keychain)
         #expect(found.logins.count == 1)
         #expect(found.waitingOn == Keychain.Item(service: "gemini", account: "antigravity-cli"))
-        let cards = await AntigravityLimits().fetch(home: nowhere, keychain: keychain)
+        let cards = await Self.antigravity().fetch(home: nowhere, keychain: keychain)
         #expect(cards.map(\.id) == ["antigravity:" + "app".sha256Prefix, "antigravity:keychain"])
         #expect(cards.last?.action == .allowKeychain)
     }
@@ -478,7 +483,7 @@ struct LimitsTests {
     }
 
     @Test func rejectedAntigravityRenewalKeepsCachedEmail() async {
-        let source = AntigravityLimits()
+        let source = Self.antigravity()
         let login = AntigravityLimits.Login(refresh: "1//fixture")
         _ = await source.session(for: login) { _ in .renewed("tok", .distantPast, "user@example.com") }
         let rejected = await source.session(for: login) { _ in .rejected }
@@ -486,9 +491,21 @@ struct LimitsTests {
         #expect(rejected.problem == "Login expired. Open Antigravity or run `agy` to sign in again.")
     }
 
+    @Test func antigravityKnowsWhoseLoginItIsWhenGoogleCantBeReached() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-tests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let emails = folder.appendingPathComponent("antigravity-accounts.json")
+        let login = AntigravityLimits.Login(access: "own-token", refresh: "1//known", expires: .distantFuture)
+        _ = await AntigravityLimits(emailsURL: emails).session(for: login) { _ in .renewed("tok", .distantFuture, "a@b.c") }
+        // After a relaunch, with Google's token service down and the login's own token still good.
+        let relaunched = await AntigravityLimits(emailsURL: emails).session(for: login) { _ in .unavailable }
+        #expect(relaunched.token == "own-token")
+        #expect(relaunched.email == "a@b.c")
+    }
+
     @Test func revokedAntigravityRefreshTokenIsNotRetried() async {
         let calls = Mutex(0)
-        let source = AntigravityLimits()
+        let source = Self.antigravity()
         let revoked = AntigravityLimits.Login(access: "fixture-access", refresh: "fixture-revoked", expires: .distantFuture)
         for _ in 0..<3 {
             let session = await source.session(for: revoked) { _ in
@@ -510,7 +527,7 @@ struct LimitsTests {
     }
 
     @Test func antigravityRenewalOnlyGivesUpWhenGoogleRefusesTheLogin() async {
-        let source = AntigravityLimits()
+        let source = Self.antigravity()
         let login = AntigravityLimits.Login(refresh: "1//portal")
         let replies = Mutex([
             HTTP.Response(status: 302, headers: ["location": "http://portal.example/"], data: Data()),

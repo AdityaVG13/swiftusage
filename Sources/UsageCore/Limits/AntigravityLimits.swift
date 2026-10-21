@@ -33,8 +33,27 @@ public actor AntigravityLimits: LimitsSource {
     private var rejected: Set<String> = []
     private var plans: [String: String] = [:]
     private var weeklyResets: Set<Date> = []
+    /// Whose each login is, by its refresh token's hash, as Google last said when renewing it. Saved, so
+    /// the account's card keeps its ID through a reading that can't renew.
+    private let emailsURL: URL
+    private lazy var emails: [String: String] = (try? Data(contentsOf: emailsURL))
+        .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) } ?? [:]
 
-    public init() {}
+    public init(emailsURL: URL = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("dev.tasteskill.UsageGraphs/antigravity-accounts.json")) {
+        self.emailsURL = emailsURL
+    }
+
+    private func email(of refresh: String) -> String? {
+        renewed[refresh]?.email ?? emails[refresh.sha256Prefix]
+    }
+
+    private func remember(_ email: String, of refresh: String) {
+        guard emails[refresh.sha256Prefix] != email else { return }
+        emails[refresh.sha256Prefix] = email
+        try? FileManager.default.createDirectory(at: emailsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(emails).write(to: emailsURL, options: .atomic)
+    }
 
     struct Login: Equatable {
         var access: String?
@@ -102,20 +121,21 @@ public actor AntigravityLimits: LimitsSource {
             return own.map { Session(token: $0) } ?? Session(problem: "Login expired. \(Self.renew)")
         }
         if rejected.contains(refresh.sha256Prefix) {
-            return Session(email: renewed[refresh]?.email, problem: "Login expired. \(Self.renew)")
+            return Session(email: email(of: refresh), problem: "Login expired. \(Self.renew)")
         }
         if let cached = renewed[refresh], cached.expires > soon { return Session(token: cached.token, email: cached.email) }
         let outcome: Renewal = if let renew { await renew(refresh) } else { await renewToken(refresh) }
         switch outcome {
-        case .renewed(let token, let expires, let email):
-            let email = email ?? renewed[refresh]?.email
+        case .renewed(let token, let expires, let named):
+            let email = named ?? email(of: refresh)
             renewed[refresh] = (token, expires, email)
+            if let email { remember(email, of: refresh) }
             return Session(token: token, email: email)
         case .rejected:
             rejected.insert(refresh.sha256Prefix)
-            return Session(email: renewed[refresh]?.email, problem: "Login expired. \(Self.renew)")
+            return Session(email: email(of: refresh), problem: "Login expired. \(Self.renew)")
         case .unavailable:
-            return own.map { Session(token: $0, email: renewed[refresh]?.email) } ?? Session(email: renewed[refresh]?.email, problem: "Couldn't reach Google.")
+            return own.map { Session(token: $0, email: email(of: refresh)) } ?? Session(email: email(of: refresh), problem: "Couldn't reach Google.")
         }
     }
 
