@@ -136,7 +136,8 @@ struct TokenChartData {
         guard max > 0 else { return [0, 1, 2] }
         let rough = Double(max) / 2
         let magnitude = pow(10, floor(log10(rough)))
-        let step = [1, 2, 2.5, 5, 10].map { $0 * magnitude }.first { $0 >= rough } ?? 10 * magnitude
+        // Tokens come whole, so a step under one would round to a second zero gridline.
+        let step = Swift.max(1, [1, 2, 2.5, 5, 10].map { $0 * magnitude }.first { $0 >= rough } ?? 10 * magnitude)
         // The largest Double below Int64.max, since a top tick past it can't be an Int64.
         let largest = Double(Int64.max).nextDown
         return [0, Int64(min(step, largest)), Int64(min(step * 2, largest))]
