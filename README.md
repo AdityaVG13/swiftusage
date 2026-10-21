@@ -86,7 +86,7 @@ Some history can't be counted:
 
 ## Limits
 
-Each provider is asked for its limits every five minutes (Customize → General sets anything from one minute to an hour), when the panel opens (at most once a minute) and whenever you click Refresh, with the login its tool already keeps; while it's being asked, the footer says so. Logins are only read, never changed, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
+Each provider is asked for its limits every five minutes (Customize → General sets anything from one minute to an hour), just after a limit's window resets, when the panel opens (at most once a minute, or every 30 seconds at the one-minute setting) and whenever you click Refresh, with the login its tool already keeps; while it's being asked, the footer says so. Logins are only read, never changed, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
 
 | Provider | Login read from | Shows |
 | --- | --- | --- |

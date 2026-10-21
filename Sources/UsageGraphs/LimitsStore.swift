@@ -13,6 +13,8 @@ final class LimitsStore {
     private(set) var accounts: [AccountLimits] = []
     private(set) var isLoading = false
     private(set) var lastFetched: Date?
+    /// When the timed reading is due.
+    private(set) var nextReading: Date?
     /// Providers read at least once since the app started.
     private(set) var readProviders: Set<Provider> = []
     /// Limit resets being used, and what came of the last use, by account.
@@ -68,6 +70,7 @@ final class LimitsStore {
         let interval = preferences.limitsInterval
         let resets = accounts.filter(isShown).flatMap(\.meters).compactMap(\.resetsAt)
         let next = LimitsTimer.next(after: lastFetched, interval: interval, resets: resets)
+        nextReading = next.at
         timer = Timer.scheduledTimer(withTimeInterval: max(1, next.at.timeIntervalSinceNow), repeats: false) { [weak self] _ in
             Task { @MainActor in
                 await self?.refresh(force: next.forReset)
@@ -80,6 +83,11 @@ final class LimitsStore {
     /// An account shows under its own provider and any tool that shares it.
     func accounts(for provider: Provider?) -> [AccountLimits] {
         accounts.filter { (provider.map($0.isUsed(by:)) ?? true) && isShown($0) }
+    }
+
+    /// The providers on that have limits to ask for, in the picker's order.
+    var providersWithLimits: [Provider] {
+        preferences.shownProviders.filter { provider in sources.contains { $0.provider == provider } }
     }
 
     /// Every account of the providers that are on, including ones turned off, for Customize.

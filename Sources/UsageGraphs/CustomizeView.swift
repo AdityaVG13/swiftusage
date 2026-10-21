@@ -608,9 +608,9 @@ private struct GeneralPage: View {
     /// `Read 2m ago · next in 3m`, or that a reading is under way.
     private func readings(_ now: Date) -> String {
         if limits.isLoading { return "Reading…" }
-        guard let last = limits.lastFetched else { return "" }
+        guard let last = limits.lastFetched, let due = limits.nextReading else { return "" }
         let ago = now.timeIntervalSince(last)
-        let next = LimitText.countdown(max(preferences.limitsInterval - ago, 0))
+        let next = LimitText.countdown(max(due.timeIntervalSince(now), 0))
         return "Read \(ago < 60 ? "just now" : LimitText.countdown(ago) + " ago") · next in \(next)"
     }
 }

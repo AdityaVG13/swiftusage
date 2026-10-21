@@ -431,8 +431,8 @@ private struct Footer: View {
     /// tab or for a refresh started here, that instead.
     private var updatedText: String {
         let name = state.provider?.name ?? "All providers"
-        if limits.isLoading, state.tab == .limits || reloading > 0 {
-            let asked = preferences.shownProviders
+        if limits.isLoading, state.tab == .limits || reloading > 0, !limits.providersWithLimits.isEmpty {
+            let asked = limits.providersWithLimits
             return asked.count == 1 ? "Asking \(asked[0].name) for its limits…" : "Asking \(asked.count) providers for their limits…"
         }
         guard let updated = state.tab == .limits ? limits.lastFetched : store.lastUpdated else { return name }
