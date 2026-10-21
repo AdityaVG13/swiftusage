@@ -61,9 +61,9 @@ private struct ProvidersPage: View {
     var body: some View {
         VStack(spacing: Theme.Layout.spacing) {
             Grid(horizontalSpacing: Theme.Layout.spacing, verticalSpacing: Theme.Layout.spacing) {
-                ForEach(0..<3) { row in
+                ForEach(Array(stride(from: 0, to: Provider.allCases.count, by: 3)), id: \.self) { first in
                     GridRow {
-                        ForEach(Provider.allCases.enumerated().filter { $0.offset / 3 == row }.map(\.element)) { provider in
+                        ForEach(Provider.allCases[first..<min(first + 3, Provider.allCases.count)], id: \.self) { provider in
                             tile(provider)
                         }
                     }
