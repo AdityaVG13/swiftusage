@@ -342,6 +342,27 @@ struct LimitsTests {
         #expect(cards.map(\.problem) == ["This OpenCode Go key has no active subscription."])
     }
 
+    @Test func limitsAreReadAgainJustAfterAWindowResets() {
+        let last = now.addingTimeInterval(-30)
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [], now: now) == (last.addingTimeInterval(3600), false))
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(600), last.addingTimeInterval(900)], now: now) == (last.addingTimeInterval(605), true))
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(10)], now: now) == (last.addingTimeInterval(60), true))
+        #expect(LimitsTimer.next(after: last, interval: 3600, resets: [last.addingTimeInterval(-10), last.addingTimeInterval(7200)], now: now) == (last.addingTimeInterval(3600), false))
+        #expect(LimitsTimer.next(after: nil, interval: 300, resets: [now.addingTimeInterval(-5)], now: now) == (now.addingTimeInterval(300), false))
+    }
+
+    @Test func freshReadingsOfWindowsThatAlreadyResetReadAsUnused() {
+        let fresh = AccountLimits(id: "claude:x", provider: .claude, meters: [
+            .percent("session", "Session", used: 100, resetsAt: now.addingTimeInterval(-60), period: 18_000),
+            .percent("weekly", "Weekly", used: 40, resetsAt: now.addingTimeInterval(-60), period: 604_800),
+            .percent("daily", "Daily", used: 30, resetsAt: now.addingTimeInterval(600), period: 86_400),
+        ], updated: now)
+        var missing: [String: Date] = [:]
+        let meters = LimitsSources.update([], with: [fresh], asked: [.claude], missingSince: &missing, now: now).first?.meters ?? []
+        #expect(meters.map(\.used) == [0, 0, 30])
+        #expect(meters.map(\.resetsAt) == [nil, now.addingTimeInterval(604_740), now.addingTimeInterval(600)])
+    }
+
     // MARK: More providers and logins
 
     @Test func antigravityReadsItsKeychainLogin() throws {

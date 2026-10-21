@@ -246,7 +246,13 @@ public enum LimitsSources {
             missing.append(account)
         }
         missingSince = Dictionary(missing.map { ($0.id, missingSince[$0.id] ?? now) }, uniquingKeysWith: { first, _ in first })
-        return (fresh.map { $0.keepingValues(of: previous[$0.id], now: now) } + missing + resting)
+        // A window that reset after the provider last counted it reads as unused, whatever the reading says.
+        let read = fresh.map { account in
+            var account = account.keepingValues(of: previous[account.id], now: now)
+            account.meters = account.metersRolledOver(at: now)
+            return account
+        }
+        return (read + missing + resting)
             .sorted { ($0.provider.order, $0.account ?? "") < ($1.provider.order, $1.account ?? "") }
     }
 
@@ -278,5 +284,18 @@ public enum LimitsSources {
             result[position] = kept
         }
         return result
+    }
+}
+
+/// When the limits are next read.
+public enum LimitsTimer {
+    /// One interval after the last reading, or just after a window resets if one does sooner
+    /// (`forReset`), so its meter doesn't keep its old value until then. Readings set off by resets are
+    /// still at least a minute apart.
+    public static func next(after lastReading: Date?, interval: TimeInterval, resets: [Date], now: Date = Date()) -> (at: Date, forReset: Bool) {
+        let last = lastReading ?? now
+        let timed = last.addingTimeInterval(interval)
+        guard let reset = resets.filter({ $0 > last }).min()?.addingTimeInterval(5), reset < timed else { return (timed, false) }
+        return (max(reset, last.addingTimeInterval(60)), true)
     }
 }

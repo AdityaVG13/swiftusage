@@ -50,7 +50,7 @@ final class LimitsStore {
     }
 
     /// Arms the next timed reading, and again each time what it's set from changes: the interval chosen in
-    /// Customize, and when the last reading was made.
+    /// Customize, when the last reading was made, and when the windows on show reset.
     private func followInterval() {
         withObservationTracking {
             schedule()
@@ -60,16 +60,21 @@ final class LimitsStore {
         }
     }
 
-    /// The next timed reading, one interval after the last reading of any kind, so a reading the panel's
-    /// opening set off pushes the timed one back rather than doubling it.
+    /// The next timed reading: one interval after the last reading of any kind, so a reading the panel's
+    /// opening set off pushes the timed one back rather than doubling it, or just after a window on show
+    /// resets. It's armed again once it has run, whatever the reading decided.
     private func schedule() {
         timer?.invalidate()
         let interval = preferences.limitsInterval
-        let due = max(1, (lastFetched ?? Date()).addingTimeInterval(interval).timeIntervalSinceNow)
-        timer = Timer.scheduledTimer(withTimeInterval: due, repeats: false) { [weak self] _ in
-            Task { @MainActor in await self?.refresh() }
+        let resets = accounts.filter(isShown).flatMap(\.meters).compactMap(\.resetsAt)
+        let next = LimitsTimer.next(after: lastFetched, interval: interval, resets: resets)
+        timer = Timer.scheduledTimer(withTimeInterval: max(1, next.at.timeIntervalSinceNow), repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refresh(force: next.forReset)
+                self?.schedule()
+            }
         }
-        timer?.tolerance = min(30, interval / 10)
+        timer?.tolerance = next.forReset ? 5 : min(30, interval / 10)
     }
 
     /// An account shows under its own provider and any tool that shares it.
