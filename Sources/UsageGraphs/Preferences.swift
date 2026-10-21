@@ -20,7 +20,10 @@ final class Preferences {
 
     /// How often each provider is asked for its limits, in seconds; one of `limitsIntervals`.
     var limitsInterval: TimeInterval {
-        didSet { UserDefaults.standard.set(limitsInterval, forKey: "limitsInterval") }
+        didSet {
+            guard limitsInterval != oldValue else { return }
+            UserDefaults.standard.set(limitsInterval, forKey: "limitsInterval")
+        }
     }
 
     /// The intervals Customize offers, and the default of five minutes.
