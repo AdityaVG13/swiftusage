@@ -144,10 +144,16 @@ public struct CodexLimits: LimitsSource {
         var result = AccountLimits(id: id, provider: .codex, account: account, plan: plan(body["plan_type"] as? String))
         let own = (body["rate_limit"] as? [String: Any]).map { meters($0, prefix: "", label: "") } ?? []
         result.meters += own
-        for extra in body["additional_rate_limits"] as? [[String: Any]] ?? [] {
+        let sparks = (body["additional_rate_limits"] as? [[String: Any]] ?? []).compactMap { extra -> (name: String, limit: [String: Any])? in
             let name = extra["limit_name"] as? String ?? extra["metered_feature"] as? String ?? ""
-            guard name.lowercased().contains("spark"), let limit = extra["rate_limit"] as? [String: Any] else { continue }
-            result.meters += meters(limit, prefix: "spark-", label: "Spark ")
+            guard name.lowercased().contains("spark"), let limit = extra["rate_limit"] as? [String: Any] else { return nil }
+            return (name, limit)
+        }
+        for spark in sparks {
+            // Several are told apart by name, so a pinned one stays pinned whatever order they come in.
+            let slug = String(spark.name.lowercased().map { $0.isLetter || $0.isNumber ? $0 : "-" })
+            let (prefix, label) = sparks.count > 1 ? (slug + "-", spark.name + " ") : ("spark-", "Spark ")
+            result.meters += meters(spark.limit, prefix: prefix, label: label)
         }
         if let review = body["code_review_rate_limit"] as? [String: Any] {
             result.meters += meters(review, prefix: "review-", label: "Code Review ")

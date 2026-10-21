@@ -384,7 +384,16 @@ struct LimitsTests {
             ],
         ]
         let cards = await LimitsSources.fetch([Fixed(account: CodexLimits.limits(body, id: "codex:x", account: nil))])
-        #expect(cards.first?.meters.map(\.id) == ["session", "spark-session", "spark-session-2"])
+        #expect(cards.first?.meters.map(\.id) == ["session", "spark-session", "spark-fast-session"])
+        // Told apart by name, they keep their IDs in either order.
+        var reordered = body
+        reordered["additional_rate_limits"] = Array(((body["additional_rate_limits"] as? [[String: Any]]) ?? []).reversed())
+        #expect(CodexLimits.limits(reordered, id: "codex:x", account: nil).meters.map(\.id) == ["session", "spark-fast-session", "spark-session"])
+        // The same ID twice still comes apart.
+        var twins = body
+        twins["additional_rate_limits"] = [["limit_name": "spark", "rate_limit": ["primary_window": window]], ["limit_name": "spark", "rate_limit": ["primary_window": window]]]
+        let twinCards = await LimitsSources.fetch([Fixed(account: CodexLimits.limits(twins, id: "codex:x", account: nil))])
+        #expect(twinCards.first?.meters.map(\.id) == ["session", "spark-session", "spark-session-2"])
     }
 
     @Test func aRefusedKeychainItemThatIsGoneReadsAsMissing() {
