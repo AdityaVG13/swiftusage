@@ -278,7 +278,6 @@ private struct Footer: View {
     @Environment(Preferences.self) private var preferences
     @Environment(PanelState.self) private var state
     @Environment(PanelPresentation.self) private var presentation
-    @State private var launchAtLogin = LoginItem.isEnabled
     /// Reloads started here that haven't finished.
     @State private var reloading = 0
     @State private var spinning = false
@@ -328,7 +327,7 @@ private struct Footer: View {
                     .keyboardShortcut(",")
                 Button("Menu Bar…") { customize(.menuBar) }
                 Button("General…") { customize(.general) }
-                Toggle("Open at Login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+                Toggle("Open at Login", isOn: Binding(get: { LoginItem.shared.isEnabled }, set: { LoginItem.shared.set($0) }))
                 Toggle("Screenshot Mode", isOn: $state.screenshotMode.animation(Theme.Motion.select))
                 Divider()
                 Button("Re-read All History") {
@@ -369,18 +368,12 @@ private struct Footer: View {
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
-        // The login item can be turned off in System Settings or Customize too.
+        // The login item can be turned off in System Settings too.
         .onChange(of: presentation.isPresented) { _, presented in
             guard presented else { return }
-            launchAtLogin = LoginItem.isEnabled
+            LoginItem.shared.reload()
             if reloading > 0 { spin() }
         }
-        .onChange(of: state.customizing) { launchAtLogin = LoginItem.isEnabled }
-    }
-
-    private func setLaunchAtLogin(_ enabled: Bool) {
-        LoginItem.set(enabled)
-        launchAtLogin = LoginItem.isEnabled
     }
 
     private func customize(_ section: CustomizeSection) {

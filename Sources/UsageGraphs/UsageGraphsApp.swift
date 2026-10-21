@@ -76,13 +76,29 @@ enum AboutPanel {
 }
 
 /// Whether the app opens at login, as macOS has it: the ⋯ menu and Customize both set it, and it can be
-/// turned off in System Settings too.
+/// turned off in System Settings too, so it's read again each time the panel opens (asking macOS is a
+/// round trip, too slow for every redraw).
 @MainActor
-enum LoginItem {
-    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+@Observable
+final class LoginItem {
+    static let shared = LoginItem()
 
-    static func set(_ enabled: Bool) {
+    private(set) var isEnabled = false
+    /// Why the last change didn't take.
+    private(set) var problem: String?
+
+    private init() {
+        reload()
+    }
+
+    func reload() {
+        isEnabled = SMAppService.mainApp.status == .enabled
+        if isEnabled { problem = nil }
+    }
+
+    func set(_ enabled: Bool) {
         let service = SMAppService.mainApp
+        var failure: Error?
         do {
             if enabled {
                 try service.register()
@@ -90,10 +106,22 @@ enum LoginItem {
                 try service.unregister()
             }
         } catch {
+            failure = error
             NSLog("swiftusage: login item change failed: \(error)")
         }
+        let status = service.status
+        isEnabled = status == .enabled
+        guard isEnabled != enabled else {
+            problem = nil
+            return
+        }
         // A login item the person once turned off in System Settings has to be allowed there again.
-        if enabled, service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        if status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
+        problem = switch status {
+        case .requiresApproval: "Allow SwiftUsage in System Settings, under Login Items."
+        case .notFound: "Only a copy of SwiftUsage in Applications can open at login."
+        default: failure.map { "macOS didn't change it: \($0.localizedDescription)" } ?? "macOS didn't change it."
+        }
     }
 }
 

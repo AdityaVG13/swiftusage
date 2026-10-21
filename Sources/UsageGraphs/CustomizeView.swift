@@ -557,28 +557,17 @@ private struct Ring: View {
 private struct GeneralPage: View {
     @Environment(LimitsStore.self) private var limits
     @Environment(Preferences.self) private var preferences
-    @Environment(PanelPresentation.self) private var presentation
-    @State private var launchAtLogin = LoginItem.isEnabled
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             interval
             Divider()
-            SettingSwitch("Open at Login", detail: "Starts SwiftUsage with your Mac, in the menu bar.",
-                          isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+            SettingSwitch("Open at Login", detail: LoginItem.shared.problem ?? "Starts SwiftUsage with your Mac, in the menu bar.",
+                          isOn: Binding(get: { LoginItem.shared.isEnabled }, set: { enabled in withAnimation(Theme.Motion.toggle) { LoginItem.shared.set(enabled) } }))
         }
         .padding(Theme.Layout.modulePadding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .module()
-        // The login item can be turned off in System Settings or the ⋯ menu too.
-        .onChange(of: presentation.isPresented) { _, presented in
-            if presented { launchAtLogin = LoginItem.isEnabled }
-        }
-    }
-
-    private func setLaunchAtLogin(_ enabled: Bool) {
-        LoginItem.set(enabled)
-        withAnimation(Theme.Motion.toggle) { launchAtLogin = LoginItem.isEnabled }
     }
 
     /// The interval, as a row of pills with the chosen one lit, with when the limits were last read and
