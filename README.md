@@ -55,7 +55,7 @@ Pinned limits sit in the menu bar after today's tokens and cost: each account's 
 
 ### Customize
 
-Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left.
+Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left. Its General page sets how often the limits are read (every five minutes unless you change it, from one minute to an hour) and whether the app opens at login.
 
 ### Screenshot Mode
 
@@ -86,7 +86,7 @@ Some history can't be counted:
 
 ## Limits
 
-Each provider is asked for its limits every five minutes and when the panel opens, with the login its tool already keeps. Logins are only read, never changed, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
+Each provider is asked for its limits every five minutes (Customize → General sets anything from one minute to an hour), when the panel opens (at most once a minute) and whenever you click Refresh, with the login its tool already keeps; while it's being asked, the footer says so. Logins are only read, never changed, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
 
 | Provider | Login read from | Shows |
 | --- | --- | --- |

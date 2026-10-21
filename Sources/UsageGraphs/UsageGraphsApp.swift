@@ -1,4 +1,5 @@
 import AppKit
+import ServiceManagement
 import UsageCore
 
 @MainActor
@@ -71,6 +72,28 @@ enum AboutPanel {
         // The app has no Dock icon, so it comes forward first or the panel opens behind the app in front.
         NSApp.activate()
         NSApp.orderFrontStandardAboutPanel(options: [.credits: credits])
+    }
+}
+
+/// Whether the app opens at login, as macOS has it: the ⋯ menu and Customize both set it, and it can be
+/// turned off in System Settings too.
+@MainActor
+enum LoginItem {
+    static var isEnabled: Bool { SMAppService.mainApp.status == .enabled }
+
+    static func set(_ enabled: Bool) {
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                try service.register()
+            } else {
+                try service.unregister()
+            }
+        } catch {
+            NSLog("swiftusage: login item change failed: \(error)")
+        }
+        // A login item the person once turned off in System Settings has to be allowed there again.
+        if enabled, service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
     }
 }
 

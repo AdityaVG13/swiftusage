@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Customize has a General page: how often the limits are read (one minute to an hour; five minutes as before) and Open at Login.
+- While the providers are being asked for their limits, after a click on Refresh or on the Limits tab, the footer says so instead of when the numbers were last read.
+
 ## 1.0.0
 
 The first release. SwiftUsage needs macOS 26 or later, on Apple silicon or Intel.

@@ -1,4 +1,3 @@
-import ServiceManagement
 import SwiftUI
 import UsageCore
 
@@ -279,7 +278,7 @@ private struct Footer: View {
     @Environment(Preferences.self) private var preferences
     @Environment(PanelState.self) private var state
     @Environment(PanelPresentation.self) private var presentation
-    @State private var launchAtLogin = SMAppService.mainApp.status == .enabled
+    @State private var launchAtLogin = LoginItem.isEnabled
     /// Reloads started here that haven't finished.
     @State private var reloading = 0
     @State private var spinning = false
@@ -328,6 +327,7 @@ private struct Footer: View {
                 Button("Customize…") { customize(.providers) }
                     .keyboardShortcut(",")
                 Button("Menu Bar…") { customize(.menuBar) }
+                Button("General…") { customize(.general) }
                 Toggle("Open at Login", isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
                 Toggle("Screenshot Mode", isOn: $state.screenshotMode.animation(Theme.Motion.select))
                 Divider()
@@ -369,28 +369,18 @@ private struct Footer: View {
         .padding(.trailing, 8)
         .padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
-        // The login item can be turned off in System Settings too.
+        // The login item can be turned off in System Settings or Customize too.
         .onChange(of: presentation.isPresented) { _, presented in
             guard presented else { return }
-            launchAtLogin = SMAppService.mainApp.status == .enabled
+            launchAtLogin = LoginItem.isEnabled
             if reloading > 0 { spin() }
         }
+        .onChange(of: state.customizing) { launchAtLogin = LoginItem.isEnabled }
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
-        let service = SMAppService.mainApp
-        do {
-            if enabled {
-                try service.register()
-            } else {
-                try service.unregister()
-            }
-        } catch {
-            NSLog("swiftusage: login item change failed: \(error)")
-        }
-        // A login item the person once turned off in System Settings has to be allowed there again.
-        if enabled, service.status == .requiresApproval { SMAppService.openSystemSettingsLoginItems() }
-        launchAtLogin = service.status == .enabled
+        LoginItem.set(enabled)
+        launchAtLogin = LoginItem.isEnabled
     }
 
     private func customize(_ section: CustomizeSection) {
@@ -444,8 +434,14 @@ private struct Footer: View {
         }
     }
 
+    /// When the numbers were last read; while the providers are being asked for their limits, on the Limits
+    /// tab or for a refresh started here, that instead.
     private var updatedText: String {
         let name = state.provider?.name ?? "All providers"
+        if limits.isLoading, state.tab == .limits || reloading > 0 {
+            let asked = preferences.shownProviders
+            return asked.count == 1 ? "Asking \(asked[0].name) for its limits…" : "Asking \(asked.count) providers for their limits…"
+        }
         guard let updated = state.tab == .limits ? limits.lastFetched : store.lastUpdated else { return name }
         let seconds = Date().timeIntervalSince(updated)
         let when = seconds < 60 ? "just now" : updated.formatted(.relative(presentation: .named))

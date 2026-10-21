@@ -1,11 +1,12 @@
 import SwiftUI
 import UsageCore
 
-/// Customize takes the panel's place: which providers and accounts the panel follows, and what the menu
-/// bar item shows. As in Control Center, each control is its own piece of glass with a circle that lights
-/// up white when it's on. The back button or Escape returns to the numbers.
+/// Customize takes the panel's place: which providers and accounts the panel follows, what the menu bar
+/// item shows, and how often the limits are read along with what else the app does on its own. As in
+/// Control Center, each control is its own piece of glass with a circle that lights up white when it's on.
+/// The back button or Escape returns to the numbers.
 ///
-/// Both pages stay built, each in a glass container of its own, and switching fades one container out
+/// All pages stay built, each in a glass container of its own, and switching fades one container out
 /// and the other in as whole layers. Glass in a shared container ignores opacity, so fading single
 /// pieces of it would leave their glass behind.
 struct CustomizeView: View {
@@ -31,9 +32,10 @@ struct CustomizeView: View {
                                           options: CustomizeSection.allCases, title: \.rawValue)
                 }
             }
-            ShownLayout(shown: section == .providers ? 0 : 1) {
+            ShownLayout(shown: CustomizeSection.allCases.firstIndex(of: section) ?? 0) {
                 page(visible: section == .providers) { ProvidersPage() }
                 page(visible: section == .menuBar) { MenuBarPage() }
+                page(visible: section == .general) { GeneralPage() }
             }
         }
         .frame(width: Theme.Layout.contentWidth)
@@ -545,6 +547,144 @@ private struct Ring: View {
         }
         .padding(1.25)
         .drawingGroup()
+    }
+}
+
+// MARK: - General
+
+/// One module of settings: how often the providers are asked for their limits, then switches for what
+/// else the app does on its own, such as opening at login.
+private struct GeneralPage: View {
+    @Environment(LimitsStore.self) private var limits
+    @Environment(Preferences.self) private var preferences
+    @Environment(PanelPresentation.self) private var presentation
+    @State private var launchAtLogin = LoginItem.isEnabled
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            interval
+            Divider()
+            SettingSwitch("Open at Login", detail: "Starts SwiftUsage with your Mac, in the menu bar.",
+                          isOn: Binding(get: { launchAtLogin }, set: setLaunchAtLogin))
+        }
+        .padding(Theme.Layout.modulePadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .module()
+        // The login item can be turned off in System Settings or the ⋯ menu too.
+        .onChange(of: presentation.isPresented) { _, presented in
+            if presented { launchAtLogin = LoginItem.isEnabled }
+        }
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        LoginItem.set(enabled)
+        withAnimation(Theme.Motion.toggle) { launchAtLogin = LoginItem.isEnabled }
+    }
+
+    /// The interval, as a row of pills with the chosen one lit, with when the limits were last read and
+    /// when they're next due.
+    private var interval: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                CardTitle("Read limits every", systemImage: "arrow.clockwise")
+                Spacer()
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    Text(readings(context.date))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                }
+            }
+            FlowLayout(spacing: 6, lineSpacing: 6) {
+                ForEach(Preferences.limitsIntervals, id: \.self) { interval in
+                    ChoicePill(title: Preferences.intervalTitle(interval), selected: preferences.limitsInterval == interval) {
+                        withAnimation(Theme.Motion.toggle) { preferences.limitsInterval = interval }
+                    }
+                }
+            }
+            .accessibilityRepresentation {
+                Picker("Read limits every", selection: Binding(get: { preferences.limitsInterval }, set: { preferences.limitsInterval = $0 })) {
+                    ForEach(Preferences.limitsIntervals, id: \.self) { Text(Preferences.intervalTitle($0)).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+            Text("Each signed-in account is asked for its limits this often, with the login its tool already keeps. The Refresh button asks right away.")
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// `Read 2m ago · next in 3m`, or that a reading is under way.
+    private func readings(_ now: Date) -> String {
+        if limits.isLoading { return "Reading…" }
+        guard let last = limits.lastFetched else { return "" }
+        let ago = now.timeIntervalSince(last)
+        let next = LimitText.countdown(max(preferences.limitsInterval - ago, 0))
+        return "Read \(ago < 60 ? "just now" : LimitText.countdown(ago) + " ago") · next in \(next)"
+    }
+}
+
+/// A setting that's on or off, as a row like System Settings': its name and a line about it, with a
+/// switch at the end.
+private struct SettingSwitch: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, detail: String, isOn: Binding<Bool>) {
+        self.title = title
+        self.detail = detail
+        _isOn = isOn
+    }
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                Text(detail)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Toggle(title, isOn: $isOn)
+                .toggleStyle(.switch)
+                .labelsHidden()
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// One of a few choices in a row: its name on a capsule, lit white while it's the one chosen.
+private struct ChoicePill: View {
+    let title: String
+    let selected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .monospacedDigit()
+                .lineLimit(1)
+                .foregroundStyle(selected ? Color.black : Color.white)
+                .padding(.horizontal, 12)
+                .frame(height: 30)
+                .background {
+                    // Drawn as is, so glass doesn't wash the white out with vibrancy.
+                    Capsule().fill(selected ? Color.white : Color.white.opacity(hovering ? 0.15 : 0.09)).drawingGroup()
+                }
+                .contentShape(.capsule)
+        }
+        .buttonStyle(PressScale())
+        .onHover { hovering = $0 }
+        .animation(Theme.Motion.hover, value: hovering)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 

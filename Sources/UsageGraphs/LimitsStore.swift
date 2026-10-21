@@ -3,9 +3,9 @@ import Observation
 import SwiftUI
 import UsageCore
 
-/// Every signed-in account's plan limits, read from the providers every five minutes and when the panel
-/// opens. The last good reading is saved, so limits show at once after a relaunch, and kept when a
-/// later reading fails.
+/// Every signed-in account's plan limits, read from the providers as often as Customize says (every five
+/// minutes unless changed) and when the panel opens. The last good reading is saved, so limits show at
+/// once after a relaunch, and kept when a later reading fails.
 @MainActor
 @Observable
 final class LimitsStore {
@@ -46,10 +46,30 @@ final class LimitsStore {
             accounts = saved
         }
         Task { await refresh() }
-        timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+        followInterval()
+    }
+
+    /// Arms the next timed reading, and again each time what it's set from changes: the interval chosen in
+    /// Customize, and when the last reading was made.
+    private func followInterval() {
+        withObservationTracking {
+            schedule()
+        } onChange: { [weak self] in
+            // After the change has landed; observation reports it as it's about to happen.
+            Task { @MainActor in self?.followInterval() }
+        }
+    }
+
+    /// The next timed reading, one interval after the last reading of any kind, so a reading the panel's
+    /// opening set off pushes the timed one back rather than doubling it.
+    private func schedule() {
+        timer?.invalidate()
+        let interval = preferences.limitsInterval
+        let due = max(1, (lastFetched ?? Date()).addingTimeInterval(interval).timeIntervalSinceNow)
+        timer = Timer.scheduledTimer(withTimeInterval: due, repeats: false) { [weak self] _ in
             Task { @MainActor in await self?.refresh() }
         }
-        timer?.tolerance = 30
+        timer?.tolerance = min(30, interval / 10)
     }
 
     /// An account shows under its own provider and any tool that shares it.
@@ -156,7 +176,8 @@ final class LimitsStore {
         account.id + "/" + meter.id
     }
 
-    /// Reads every provider again, unless that happened within the last minute and `force` isn't set.
+    /// Reads every provider again, unless that happened within the last minute (or half the interval, when
+    /// that's shorter) and `force` isn't set.
     func refresh(force: Bool = false) async {
         if let running = inFlight {
             await running.value
@@ -164,7 +185,7 @@ final class LimitsStore {
             guard force else { return }
             if let next = inFlight, next != running { return await next.value }
         }
-        if !force, let lastFetched, Date().timeIntervalSince(lastFetched) < 60 { return }
+        if !force, let lastFetched, Date().timeIntervalSince(lastFetched) < min(60, preferences.limitsInterval / 2) { return }
         let task = Task { await fetch() }
         inFlight = task
         await task.value

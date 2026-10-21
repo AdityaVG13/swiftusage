@@ -11,6 +11,7 @@ enum PanelTab: String, CaseIterable {
 enum CustomizeSection: String, CaseIterable {
     case providers = "Providers"
     case menuBar = "Menu Bar"
+    case general = "General"
 }
 
 /// What the panel is showing. Views only redraw for the properties they read, so what the pointer is
