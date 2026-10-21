@@ -382,6 +382,13 @@ struct LimitsTests {
         #expect(cards.first?.meters.map(\.id) == ["session", "spark-session", "spark-session-2"])
     }
 
+    @Test func aRefusedKeychainItemThatIsGoneReadsAsMissing() {
+        let item = Keychain.Item(service: "swiftusage-tests-\(UUID().uuidString)", account: "gone")
+        Keychain.setRefused(item, true)
+        #expect(Keychain.password(item) == .missing)
+        #expect(!Keychain.isRefused(item))
+    }
+
     // MARK: More providers and logins
 
     @Test func antigravityReadsItsKeychainLogin() throws {

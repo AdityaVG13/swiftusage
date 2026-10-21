@@ -40,12 +40,14 @@ public enum ClaudeDesktop {
     static func storageKey(asking: Bool) -> StorageKey {
         // Asking macOS not to show its prompt doesn't stop it, so a read that would ask doesn't happen.
         if !asking {
-            guard !Keychain.isRefused(storageItem) else { return .needsPermission }
             switch Keychain.access(storageItem, by: .app) {
             case .allowed: break
-            case .missing: return .missing
+            case .missing:
+                Keychain.setRefused(storageItem, false)
+                return .missing
             case .needsPermission: return .needsPermission
             }
+            guard !Keychain.isRefused(storageItem) else { return .needsPermission }
         }
         var query = storageItem.query
         query[kSecReturnData as String] = true
@@ -56,6 +58,7 @@ public enum ClaudeDesktop {
             guard let data = item as? Data, let key = String(data: data, encoding: .utf8), !key.isEmpty else { return .missing }
             return .key(key)
         case errSecItemNotFound:
+            Keychain.setRefused(storageItem, false)
             return .missing
         default:
             // The person declined, or the keychain couldn't be read. A build whose signature changed since

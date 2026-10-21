@@ -71,12 +71,15 @@ public enum Keychain {
 
     /// The password of a generic keychain item, read with `/usr/bin/security`.
     static func password(_ item: Item) -> Reading {
-        guard !state.withLock({ $0.refused.contains(item) }) else { return .needsPermission }
         switch access(item, by: .securityTool) {
-        case .missing: return .missing
+        case .missing:
+            // Gone since it was refused, say after it was deleted to stop a prompt.
+            setRefused(item, false)
+            return .missing
         case .needsPermission: return .needsPermission
         case .allowed: break
         }
+        guard !isRefused(item) else { return .needsPermission }
         switch run(security, arguments(item)) {
         case .succeeded(let output):
             let value = output.trimmingCharacters(in: .whitespacesAndNewlines)
