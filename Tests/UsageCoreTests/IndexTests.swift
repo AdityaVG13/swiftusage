@@ -379,6 +379,44 @@ struct IndexTests {
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
 
+    @Test func anotherFoldersIndexStaysAndThisFolderGetsOneBesideIt() async throws {
+        let first = try TempProjects(), second = try TempProjects()
+        let folder = first.root.deletingLastPathComponent().appendingPathComponent("cache")
+        let cache = folder.appendingPathComponent("index.json")
+        try first.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_a")])
+        try second.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z"), Lines.assistant("2026-10-18T09:00:01Z", id: "msg_b"),
+                                        Lines.assistant("2026-10-18T09:00:02Z", id: "msg_c")])
+        let index = UsageIndex(projectsURL: first.root, cacheURL: cache)
+        _ = await index.refresh()
+        await index.save()
+        let firstsIndex = try Data(contentsOf: cache)
+
+        let other = UsageIndex(projectsURL: second.root, cacheURL: cache)
+        #expect(await other.refresh().usage.count == 2)
+        await other.save()
+        #expect(try Data(contentsOf: cache) == firstsIndex)
+        // Its own index is read on the next launch, even once its transcripts are gone.
+        try FileManager.default.removeItem(at: second.root.appendingPathComponent("-p/s.jsonl"))
+        #expect(await UsageIndex(projectsURL: second.root, cacheURL: cache).refresh().usage.count == 2)
+        #expect(await UsageIndex(projectsURL: first.root, cacheURL: cache).refresh().usage.count == 1)
+    }
+
+    @Test func anIndexTooOldToUpgradeIsSetAside() async throws {
+        let projects = try TempProjects()
+        let folder = projects.root.deletingLastPathComponent().appendingPathComponent("cache")
+        let cache = folder.appendingPathComponent("index.json")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let ancient = #"{"version":0,"root":"\#(projects.root.path)","records":{}}"#
+        try Data(ancient.utf8).write(to: cache)
+        try projects.write("-p/s.jsonl", [Lines.user("2026-10-18T09:00:00Z")])
+        let index = UsageIndex(projectsURL: projects.root, cacheURL: cache)
+        _ = await index.refresh()
+        await index.save()
+        let asides = try FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("index.json.unreadable-") }
+        #expect(try asides.map { try String(contentsOf: $0, encoding: .utf8) } == [ancient])
+    }
+
     @Test func historyListedInAnotherOrderIsTheSameHistory() {
         var first = UsageData()
         first.transcriptCount = 3

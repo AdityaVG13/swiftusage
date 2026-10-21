@@ -124,7 +124,9 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
     private static var saveInterval: TimeInterval { 300 }
 
     public nonisolated let root: URL
-    private let cacheURL: URL?
+    private var cacheURL: URL?
+    /// Set once the index has moved beside another folder's, which keeps the file it found.
+    private var cacheKeyedByRoot = false
     private var records: [String: FileRecord] = [:]
     private var loadedCache = false
     /// Set when the saved index is from an older version: the next scan reads every transcript still on
@@ -344,23 +346,26 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         loadedCache = true
         guard let cacheURL, let raw = try? Data(contentsOf: cacheURL) else { return }
         let decoder = JSONDecoder()
-        // A newer build's index, or one for another folder (a different `CLAUDE_CONFIG_DIR`), isn't this
-        // run's to replace. Its records may not even decode here, so only its header is read then.
-        func belongsElsewhere(_ header: CacheHeader) -> Bool { header.root != root.path || header.version > Format.cacheVersion }
-        guard let file = try? decoder.decode(CacheFile.self, from: raw) else {
-            if let header = try? decoder.decode(CacheHeader.self, from: raw), belongsElsewhere(header) {
-                savingDisabled = true
-            } else if !savingDisabled {
-                // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
-                UnreadableFile.setAside(cacheURL)
-            }
-            return
+        // A newer build's records may not decode here, so only its header is read then.
+        let file = try? decoder.decode(CacheFile.self, from: raw)
+        let header = file.map { CacheHeader(version: $0.version, root: $0.root) } ?? (try? decoder.decode(CacheHeader.self, from: raw))
+        if let header, header.root != root.path, !cacheKeyedByRoot {
+            // Another folder's index (a different `CLAUDE_CONFIG_DIR`) stays as it is; this folder's lives beside it.
+            self.cacheURL = cacheURL.deletingPathExtension()
+                .appendingPathExtension(String(fnv1a(root.path), radix: 16)).appendingPathExtension(cacheURL.pathExtension)
+            cacheKeyedByRoot = true
+            return loadCache()
         }
-        guard !belongsElsewhere(CacheHeader(version: file.version, root: file.root)) else {
+        // Nor is a newer build's index this run's to replace.
+        if let header, header.root != root.path || header.version > Format.cacheVersion {
             savingDisabled = true
             return
         }
-        guard file.version >= Format.upgradableCacheVersion else { return }
+        // Set aside rather than overwritten, since it may hold the only record of deleted transcripts.
+        guard let file, file.version >= Format.upgradableCacheVersion else {
+            if !savingDisabled { UnreadableFile.setAside(cacheURL) }
+            return
+        }
         records = file.records
         if file.version == Format.cacheVersion {
             lastSave = Date()
