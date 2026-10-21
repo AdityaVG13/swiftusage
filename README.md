@@ -25,7 +25,7 @@ SwiftUsage needs macOS 26 or later, on Apple silicon or Intel. It runs natively 
 
 The app is signed with a Developer ID and notarized by Apple; the first time it opens, macOS asks once whether to open an app downloaded from the internet. To update, quit it (⋯ → Quit SwiftUsage) and drag the new version over the old one; settings and the saved history carry over.
 
-To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests and the price list, and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
+To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
 
 ## The panel
 

@@ -6,6 +6,7 @@
 - While the providers are being asked for their limits, after a click on Refresh or on the Limits tab, the footer says so instead of when the numbers were last read.
 - Limits are read again just after a window resets, and a window that has reset reads as unused, so the menu bar no longer shows a limit as reached until the next reading.
 - Codex's compressed rollouts are read without Homebrew: zstd's decoder is built in. The app no longer loads libraries from outside itself, so macOS's library validation is on again.
+- The account each Antigravity and Pi login belongs to, and each Cursor login's plan, are remembered in the cache folder, so a reading that can't ask (an expired login, a provider that doesn't answer) still shows the right card.
 - The history index is saved in a compact binary form. For 31 GB of Codex rollouts it's half the size (27 MB), loads in a quarter of a second instead of more than one, saves in 40 ms instead of a second, and the app needs about 200 MB less memory. It's saved beside the JSON index earlier versions keep, which is read when there's no binary one yet and otherwise left for them.
 
 ## 1.0.0

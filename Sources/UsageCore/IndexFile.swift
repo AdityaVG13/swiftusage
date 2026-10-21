@@ -15,10 +15,6 @@ enum IndexFile {
         var root: String
     }
 
-    static func isIndexFile(_ data: Data) -> Bool {
-        data.starts(with: magic)
-    }
-
     static func encode(version: Int, root: String, records: [String: FileRecord]) -> [UInt8] {
         var strings = Strings()
         var body = Writer()
