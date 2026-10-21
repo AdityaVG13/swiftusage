@@ -378,4 +378,21 @@ struct IndexTests {
         #expect(StatsBuilder.build(data, range: .all, now: now, clock: utc).messages == 2)
         #expect(!FileManager.default.fileExists(atPath: cache.path))
     }
+
+    @Test func historyListedInAnotherOrderIsTheSameHistory() {
+        var first = UsageData()
+        first.transcriptCount = 3
+        first.sessionStarts = [3, 1, 2]
+        first.usage = (0..<40).map { UsageRecord(bucket: Int32($0 % 7), model: "model-\($0 % 3)", tokens: TokenCounts(input: Int64($0))) }
+        var second = first
+        second.sessionStarts.reverse()
+        second.usage.reverse()
+        #expect(first.sameHistory(as: second))
+
+        second.usage[5].tokens.output += 1
+        #expect(!first.sameHistory(as: second))
+        second = first
+        second.usage[0] = first.usage[1]
+        #expect(!first.sameHistory(as: second))
+    }
 }

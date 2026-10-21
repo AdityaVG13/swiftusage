@@ -14,10 +14,14 @@ public struct UsageData: Sendable {
 
     public var isEmpty: Bool { sessionStarts.isEmpty && usage.isEmpty && messageBuckets.isEmpty }
 
-    /// Whether two reads found the same history, whenever each was made.
+    /// Whether two reads found the same history, whenever each was made. Sources that rebuild their
+    /// history from dictionaries list it in another order on each read, so the order doesn't count.
     public func sameHistory(as other: UsageData) -> Bool {
-        transcriptCount == other.transcriptCount && sessionStarts == other.sessionStarts
-            && messageBuckets == other.messageBuckets && usage == other.usage
+        guard transcriptCount == other.transcriptCount, sessionStarts.count == other.sessionStarts.count,
+              usage.count == other.usage.count, messageBuckets == other.messageBuckets else { return false }
+        if sessionStarts == other.sessionStarts, usage == other.usage { return true }
+        return sessionStarts.sorted() == other.sessionStarts.sorted()
+            && usage.sorted(by: UsageRecord.precedes) == other.usage.sorted(by: UsageRecord.precedes)
     }
 
     /// Several providers' usage as one.
