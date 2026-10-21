@@ -256,7 +256,7 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
         }
 
         if !jobs.isEmpty {
-            let archives = Dictionary(jobs.filter { $0.path.hasSuffix(".zst") }.map { ($0.key, $0.record) }, uniquingKeysWith: { first, _ in first })
+            let archives = Dictionary(jobs.filter { $0.path.hasSuffix(".zst") }.map { ($0.key, $0) }, uniquingKeysWith: { first, _ in first })
             jobs.sort { ($0.record.size - min($0.record.offset, $0.record.size)) > ($1.record.size - min($1.record.offset, $1.record.size)) }
             let total = jobs.reduce(Int64(0)) { $0 + Int64($1.record.size - min($1.record.offset, $1.record.size)) }
             var bytesDone: Int64 = 0
@@ -277,11 +277,12 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
                     // summary and is tried again next time.
                     if let record {
                         records[key] = record
-                    } else if let archive = archives[key] {
+                    } else if let archive = archives[key], Self.opens(archive.path) {
                         // A damaged archive only fails once it's been read through, so rather than being
-                        // decompressed again on every pass it waits for another copy, keeping what it had.
-                        var kept = records[key] ?? archive
-                        (kept.size, kept.modified, kept.inode) = (archive.size, archive.modified, archive.inode)
+                        // decompressed again on every pass it waits for another copy, keeping what it had. One
+                        // that couldn't even be opened (its permissions, say) is tried again like any file.
+                        var kept = records[key] ?? archive.record
+                        (kept.size, kept.modified, kept.inode) = (archive.record.size, archive.record.modified, archive.record.inode)
                         records[key] = kept
                     } else if rereading.contains(key) {
                         records[key]?.inode = 0
@@ -362,6 +363,13 @@ public actor TranscriptIndex<Format: TranscriptFormat>: UsageSource {
             data.sessionStarts.append(start)
         }
         return data
+    }
+
+    private static func opens(_ path: String) -> Bool {
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return false }
+        close(fd)
+        return true
     }
 
     /// Where the index is saved: beside `cacheURL`, where earlier versions kept it as JSON. That copy is
