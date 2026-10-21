@@ -502,6 +502,27 @@ struct LimitsTests {
         #expect(calls.withLock { $0 } == 2)
     }
 
+    @Test func antigravityRenewalOnlyGivesUpWhenGoogleRefusesTheLogin() async {
+        let source = AntigravityLimits()
+        let login = AntigravityLimits.Login(refresh: "1//portal")
+        let replies = Mutex([
+            HTTP.Response(status: 302, headers: ["location": "http://portal.example/"], data: Data()),
+            HTTP.Response(status: 200, headers: [:], data: Data(#"{"access_token":"renewed","expires_in":3600}"#.utf8)),
+        ])
+        let first = await HTTP.$transport.withValue({ _ in replies.withLock { $0.removeFirst() } }) { await source.session(for: login) }
+        #expect(first.token == nil)
+        let second = await HTTP.$transport.withValue({ _ in replies.withLock { $0.removeFirst() } }) { await source.session(for: login) }
+        #expect(second.token == "renewed")
+    }
+
+    @Test func cursorWeeklyPlanWithoutItsResetHasNoReset() {
+        let usage: [String: Any] = ["billingCycleStart": "2026-10-01T00:00:00Z", "billingCycleEnd": "2026-11-01T00:00:00Z",
+                                    "planUsage": ["totalPercentUsed": 40]]
+        let card = CursorLimits.limits(usage, planInfo: ["includedUsagePeriod": "INCLUDED_USAGE_PERIOD_WEEKLY"], id: "cursor:x", account: nil, plan: "Pro")
+        #expect(card.meters.first?.resetsAt == nil)
+        #expect(card.meters.first?.period == 604_800)
+    }
+
     @Test func piReadsItsSubscriptionLogins() {
         let auth = object("""
             {"anthropic":{"type":"oauth","access":"sk-ant-oat","refresh":"r","expires":1792500000000},

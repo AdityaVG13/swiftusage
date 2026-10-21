@@ -198,7 +198,8 @@ public struct CursorLimits: LimitsSource {
         var reset = end
         var period = start.flatMap { start in end.map { $0.timeIntervalSince(start) } }
         if planInfo?["includedUsagePeriod"] as? String == "INCLUDED_USAGE_PERIOD_WEEKLY" {
-            reset = JSONValue.date(planInfo?["includedUsageResetsAt"]) ?? reset
+            // The billing month's end isn't the week's.
+            reset = JSONValue.date(planInfo?["includedUsageResetsAt"])
             period = .week
         }
 

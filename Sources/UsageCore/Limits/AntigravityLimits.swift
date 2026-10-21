@@ -210,10 +210,11 @@ public actor AntigravityLimits: LimitsSource {
             let lifetime = JSONValue.number(body["expires_in"]) ?? 3600
             let email = (body["id_token"] as? String).flatMap(JWT.claims)?["email"] as? String
             return .renewed(token, Date().addingTimeInterval(lifetime), email)
-        case 408, 429, 500...:
-            return .unavailable
-        default:
+        case 400, 401:
+            // Google refusing the login itself; anything else (a captive portal's redirect, a proxy) may pass.
             return .rejected
+        default:
+            return .unavailable
         }
     }
 
