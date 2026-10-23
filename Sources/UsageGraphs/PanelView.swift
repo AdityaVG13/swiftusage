@@ -339,6 +339,11 @@ private struct Footer: View {
                     }
                 }
                 Divider()
+                if Updater.shared.canUpdate {
+                    Button(Updater.shared.offered.map { "Update to SwiftUsage \($0.version)…" } ?? "Check for Updates…") {
+                        Updater.shared.checkNow()
+                    }
+                }
                 Button("About SwiftUsage") { AboutPanel.show() }
                 Button("Quit SwiftUsage") {
                     NSApp.terminate(nil)

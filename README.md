@@ -23,9 +23,11 @@ SwiftUsage needs macOS 26 or later, on Apple silicon or Intel. It runs natively 
 2. Open it and drag SwiftUsage to Applications.
 3. Open SwiftUsage from Applications. It has no Dock icon or window: it's the item in the menu bar, and clicking it opens the panel. Open at Login in the ⋯ menu starts it with your Mac.
 
-The app is signed with a Developer ID and notarized by Apple; the first time it opens, macOS asks once whether to open an app downloaded from the internet. To update, quit it (⋯ → Quit SwiftUsage) and drag the new version over the old one; settings and the saved history carry over.
+The app is signed with a Developer ID and notarized by Apple; the first time it opens, macOS asks once whether to open an app downloaded from the internet.
 
-To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
+SwiftUsage updates itself. Once a day it reads the latest release's `feed.json` from GitHub (the request carries nothing about your usage), downloads a newer version in the background, and then opens a window offering Install and Relaunch, Remind Me Later (asks again a day later) or Skip This Version. ⋯ → Check for Updates… looks right away, and Customize → General turns the daily check off. An update installs only if it's signed with the same Developer ID as the copy you have, notarized by Apple, the version the release names and newer; it replaces the app in one step and reopens it, and settings and the saved history carry over. A copy opened straight from the disk image or Downloads can't replace itself, so its window offers the download instead. You can always update by hand too: quit SwiftUsage (⋯ → Quit SwiftUsage) and drag the new version over the old one.
+
+To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, a downloaded update waiting to be installed, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
 
 ## The panel
 
@@ -55,7 +57,7 @@ Pinned limits sit in the menu bar after today's tokens and cost: each account's 
 
 ### Customize
 
-Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left. Its General page sets how often the limits are read (every five minutes unless you change it, from one minute to an hour) and whether the app opens at login.
+Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left. Its General page sets how often the limits are read (every five minutes unless you change it, from one minute to an hour), whether the app opens at login, and whether it checks for updates.
 
 ### Screenshot Mode
 
@@ -126,7 +128,7 @@ swift test                        # parser, incremental reading, stats, pricing 
 
 ### Releasing
 
-`./scripts/release.sh` makes a release in `dist/`: `SwiftUsage-<version>.dmg` and `.zip`, built for Apple silicon and Intel, signed with the keychain's Developer ID Application certificate and the hardened runtime, notarized by Apple and stapled; their `SHA256SUMS`; the version's notes from `CHANGELOG.md`; and the app's debug symbols, for reading crash reports. It runs the tests first, and checks everything else it needs before it builds. It lays out the disk image with [dmgbuild](https://github.com/dmgbuild/dmgbuild), which it runs through uv (`brew install uv`).
+`./scripts/release.sh` makes a release in `dist/`: `SwiftUsage-<version>.dmg` and `.zip`, built for Apple silicon and Intel, signed with the keychain's Developer ID Application certificate and the hardened runtime, notarized by Apple and stapled; their `SHA256SUMS`; the version's notes from `CHANGELOG.md`; the app's debug symbols, for reading crash reports; and `feed.json`, which installed copies read to update themselves: the version and build, the zip's address in the release, and its SHA-256 and size. The app reads the feed from the latest release on GitHub (`releases/latest/download/feed.json` under the `SwiftUsageReleases` address that `scripts/build-app.sh` puts in its Info.plist), so publishing a release is all it takes to update everyone. It runs the tests first, and checks everything else it needs before it builds. It lays out the disk image with [dmgbuild](https://github.com/dmgbuild/dmgbuild), which it runs through uv (`brew install uv`).
 
 1. Set the version in `VERSION` and describe it under its own heading in `CHANGELOG.md` (`## <version>`, alone on its line). Commit everything: the build number counts commits, and the script stops when the working tree has uncommitted changes, so the release is exactly the commit it names.
 2. Once on each Mac, save notarytool's credentials in the keychain as `swiftusage`. With an App Store Connect API key (Users and Access → Integrations → Team Keys, Developer role):
@@ -141,9 +143,11 @@ swift test                        # parser, incremental reading, stats, pricing 
    ```sh
    v=$(<VERSION)
    git push origin main
-   gh release create v$v dist/SwiftUsage-$v.dmg dist/SwiftUsage-$v.zip dist/SHA256SUMS \
+   gh release create v$v dist/SwiftUsage-$v.dmg dist/SwiftUsage-$v.zip dist/SHA256SUMS dist/feed.json \
        --target "$(<dist/COMMIT)" --title "SwiftUsage $v" --notes-file dist/SwiftUsage-$v-notes.md
    ```
+
+   The feed points at the zip under the tag `v<version>`, so the release has to have that tag, and the zip and the feed have to be uploaded as they are. The repository has to be public for installed copies to read it.
 
 `./scripts/release.sh --skip-notarization` makes the same files without notarizing them, to check the packaging, uncommitted changes and all; Gatekeeper turns those away on other Macs.
 

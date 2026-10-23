@@ -1,7 +1,8 @@
 #!/bin/zsh
 # Makes a release of SwiftUsage, at the version in VERSION, in ./dist: the app for Apple silicon and
 # Intel, signed with a Developer ID, notarized and stapled, as a disk image and a zip, with their SHA-256
-# sums, release notes from CHANGELOG.md and the app's debug symbols.
+# sums, release notes from CHANGELOG.md, the app's debug symbols, and feed.json, which tells copies
+# already installed about the release so they update themselves.
 #
 # Notarizing uses the credentials notarytool keeps in the keychain as $NOTARY_PROFILE ("swiftusage" by
 # default); the README's Releasing section shows how to save them. --skip-notarization makes the same
@@ -100,6 +101,21 @@ awk -v heading="## $VERSION" '$0 == heading { found = 1; next } found && /^## / 
     | sed '/./,$!d' > "$WORK/dist/$NAME-notes.md"
 git rev-parse HEAD > "$WORK/dist/COMMIT"
 (cd "$WORK/dist" && shasum -a 256 "$NAME.dmg" "$NAME.zip" > SHA256SUMS)
+
+# What the app's updater reads (Updater.swift) from the latest release: the version, the zip it downloads
+# from this release, and its hash and size. Built as a property list, which plutil edits, then written
+# out as JSON.
+PLIST="$APP/Contents/Info.plist"
+RELEASES=$(plutil -extract SwiftUsageReleases raw "$PLIST")
+FEED="$WORK/feed.plist"
+plutil -create xml1 "$FEED"
+plutil -insert version -string "$VERSION" "$FEED"
+plutil -insert build -integer "$(plutil -extract CFBundleVersion raw "$PLIST")" "$FEED"
+plutil -insert minimumSystemVersion -string "$(plutil -extract LSMinimumSystemVersion raw "$PLIST")" "$FEED"
+plutil -insert url -string "$RELEASES/download/v$VERSION/$NAME.zip" "$FEED"
+plutil -insert sha256 -string "$(shasum -a 256 "$WORK/dist/$NAME.zip" | cut -d' ' -f1)" "$FEED"
+plutil -insert size -integer "$(stat -f%z "$WORK/dist/$NAME.zip")" "$FEED"
+plutil -convert json -r -o "$WORK/dist/feed.json" "$FEED"
 
 rm -rf "$DIST"
 mv "$WORK/dist" "$DIST"

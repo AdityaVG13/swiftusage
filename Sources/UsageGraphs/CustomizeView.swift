@@ -565,6 +565,12 @@ private struct GeneralPage: View {
             Divider()
             SettingSwitch("Open at Login", detail: LoginItem.shared.problem ?? "Starts SwiftUsage with your Mac, in the menu bar.",
                           isOn: Binding(get: { LoginItem.shared.isEnabled }, set: { enabled in withAnimation(Theme.Motion.toggle) { LoginItem.shared.set(enabled) } }))
+            Divider()
+            let updater = Updater.shared
+            SettingSwitch("Check for Updates",
+                          detail: updater.canUpdate ? "Looks for a new version once a day and downloads it, then asks before installing it." : "This is a development build, which doesn't update itself.",
+                          isOn: Binding(get: { updater.checksAutomatically }, set: { enabled in withAnimation(Theme.Motion.toggle) { updater.checksAutomatically = enabled } }))
+                .disabled(!updater.canUpdate)
         }
         .padding(Theme.Layout.modulePadding)
         .frame(maxWidth: .infinity, alignment: .leading)

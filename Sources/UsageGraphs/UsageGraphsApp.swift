@@ -145,6 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let preferences = Preferences()
         menuBar = MenuBarController(store: UsageStore(preferences: preferences), limits: LimitsStore(preferences: preferences), preferences: preferences)
+        Updater.shared.start()
         // The first time, the panel opens by itself, under the item it's found at from then on, once the
         // menu bar has placed the item.
         if !UserDefaults.standard.bool(forKey: "hasOpened") {

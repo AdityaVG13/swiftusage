@@ -13,6 +13,9 @@ APP="$ROOT/build/SwiftUsage.app"
 VERSION=$(<VERSION)
 # Counts commits, so each release's build number is higher than the last one's.
 BUILD=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+# Where the releases are published. The app checks the latest one's feed.json for updates, and
+# scripts/release.sh points the feed at the zip it publishes there.
+RELEASES=https://github.com/Blueemi/swiftusage/releases
 
 release=false
 install=false
@@ -72,6 +75,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSHumanReadableCopyright</key><string>© 2026 @blueemi99</string>
+    <key>SwiftUsageReleases</key><string>$RELEASES</string>
 </dict>
 </plist>
 PLIST
