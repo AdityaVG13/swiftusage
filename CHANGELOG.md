@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
 
 - SwiftUsage updates itself: it downloads a new version in the background and asks before installing it.
 - Customize has a General page: how often the limits are read (one minute to an hour; five minutes as before) and Open at Login.
