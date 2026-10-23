@@ -196,6 +196,10 @@ The name, mark, logo, app icon, colors and type are in the [brand kit](brand/).
 
 SwiftUsage is made by [@blueemi99](https://x.com/blueemi99). Follow along on X for updates and what's next.
 
+## License
+
+SwiftUsage is under the [MIT License](LICENSE).
+
 ## Notices
 
 The price lists the app ships with come from LiteLLM and OpenUsage, under the MIT License; [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) has their licenses, and the app carries a copy. Provider names and logos belong to their owners, and SwiftUsage isn't affiliated with any of them.
