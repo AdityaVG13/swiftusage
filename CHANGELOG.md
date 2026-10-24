@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.2.0
 
 - Anonymous statistics, sent through PostHog: a daily check-in with the app's version and which providers are on and in use, crash reports, and, unless Help Improve SwiftUsage is turned off in Customize → General, each day's count of panel openings and of limit readings that worked or failed, by kind. None of it names a person or an account or says how much anyone used; `docs/privacy.md` lists every field.
 - Cursor's tokens are counted: they come from the usage events Cursor's dashboard lists, asked for with the login Cursor keeps, with the cost Cursor priced each request at. The first fetch reads the whole history; later ones the last two days.
