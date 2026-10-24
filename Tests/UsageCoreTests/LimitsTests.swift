@@ -775,6 +775,64 @@ struct LimitsTests {
         #expect(logins.first?.subscription == "max")
     }
 
+    @Test func claudeDesktopNeverAddsACardNamedAfterItself() async throws {
+        let password = "desktop-storage-password"
+        func config(expires: Int) throws -> [String: Any] {
+            let cache = ["acct:A|9d1c250a-e61b-44d9-88ed-5944d1962f5e:O:https://api.anthropic.com:user:inference user:profile":
+                            ["token": "sk-ant-oat-desktop-\(UUID().uuidString)", "expiresAt": expires]]
+            return ["lastKnownAccountUuid": "A",
+                    "oauth:tokenCacheV2": try Self.seal(JSONSerialization.data(withJSONObject: cache), password: password).base64EncodedString()]
+        }
+        let live = try config(expires: Int(Date().timeIntervalSince1970 * 1000) + 3_600_000), expired = try config(expires: 1000)
+        let names = Remembered<[String: String]>(Self.remembered("claude-desktop-accounts.json"))
+        func read(_ config: [String: Any], _ key: ClaudeDesktop.StorageKey, signedIn: Set<String> = [], served: Set<String> = []) async -> [AccountLimits] {
+            await HTTP.$transport.withValue({ request in
+                if request.url!.path.hasSuffix("/profile") {
+                    let profile = #"{"account":{"uuid":"A","email":"me@x.com"},"organization":{"uuid":"O","name":"me@x.com's Organization"}}"#
+                    return HTTP.Response(status: 200, headers: [:], data: Data(profile.utf8))
+                }
+                if request.url!.path.hasSuffix("/usage"), request.url!.query == nil {
+                    return HTTP.Response(status: 200, headers: [:], data: Data(#"{"five_hour":{"utilization":10}}"#.utf8))
+                }
+                return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+            }) {
+                await ClaudeDesktop.limits(config: config, served: served, signedIn: signedIn, ids: [], storageKey: { key }, names: names)
+            }
+        }
+
+        // An account a Claude Code login has keeps that card, which says what's wrong; Desktop only fills it in.
+        #expect(await read(live, .needsPermission, signedIn: ["a"]).isEmpty)
+        #expect(await read(expired, .key(password), signedIn: ["a"]).isEmpty)
+        #expect(await read(live, .key(password), signedIn: ["a"], served: ["a"]).isEmpty)
+
+        // An account only Desktop has, never read: nothing names it, so only asking for access gets a card.
+        #expect(await read(expired, .key(password)).isEmpty)
+        let asking = await read(live, .needsPermission)
+        #expect(asking.map(\.id) == ["claude-desktop:a"])
+        #expect(asking.first?.account == nil)
+        #expect(asking.first?.action == .allowClaudeDesktop)
+
+        let readCards = await read(live, .key(password))
+        #expect(readCards.map(\.id) == ["claude:a|o"])
+        #expect(readCards.first?.account == "Personal")
+        #expect(readCards.first?.hasValues == true)
+
+        // Once read, the account keeps its card and name when Desktop's login can't be read.
+        let waiting = await read(live, .needsPermission)
+        #expect(waiting.map(\.id) == ["claude:a|o"])
+        #expect(waiting.first?.account == "Personal")
+        #expect(waiting.first?.action == .allowClaudeDesktop)
+        let lapsed = await read(expired, .key(password))
+        #expect(lapsed.map(\.id) == ["claude:a|o"])
+        #expect(lapsed.first?.account == "Personal")
+        #expect(lapsed.first?.problem == "Login expired. Open Claude Desktop to renew it.")
+
+        // A Claude Code card whose reading failed gets Desktop's values, under the same ID, so the two are one card.
+        let filled = await read(live, .key(password), signedIn: ["a"])
+        #expect(filled.map(\.id) == ["claude:a|o"])
+        #expect(filled.first?.hasValues == true)
+    }
+
     /// Electron's encryption, to make a test cache: `v10` and AES-128-CBC with the PBKDF2 key.
     private static func seal(_ plain: Data, password: String) throws -> Data {
         var key = Data(count: kCCKeySizeAES128)

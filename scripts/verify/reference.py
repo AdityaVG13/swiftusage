@@ -37,9 +37,14 @@ for rel in order:
                 keys.setdefault(k, bucket)
             elif d['type'] == 'assistant':
                 m = d.get('message') if isinstance(d.get('message'), dict) else {}
-                k = ('m', m['id']) if m.get('id') else ('line', rel, here)
                 u = m.get('usage') or {}
                 tok = [u.get('input_tokens') or 0, u.get('output_tokens') or 0, u.get('cache_read_input_tokens') or 0, u.get('cache_creation_input_tokens') or 0]
+                # an ID of 20+ characters is one response's; a gateway's shorter one is told apart by request or prompt
+                if not m.get('id'): k = ('line', rel, here)
+                elif len(m['id'].encode()) >= 20: k = ('m', m['id'])
+                elif d.get('requestId'): k = ('mr', m['id'], d['requestId'])
+                elif tok[0] + tok[2] + tok[3] > 0: k = ('mp', m['id'], tok[0], tok[2], tok[3])
+                else: continue
                 if k not in usage or sum(tok) >= sum(usage[k][2]): usage[k] = (bucket, m.get('model') or 'unknown', tok)
                 if main_thread and m.get('model') != '<synthetic>': keys.setdefault(k, bucket)
     files[rel] = dict(sub=sub, start=start, keys=keys, usage=usage)

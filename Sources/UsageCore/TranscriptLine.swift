@@ -47,6 +47,11 @@ public struct TranscriptLine: Sendable, Equatable {
     public var model: String?
     /// FNV-1a hash of `message.id`, or 0 when the line has none.
     public var messageID: UInt64 = 0
+    /// Whether `message.id` is one of a kind, as Anthropic, Bedrock and Vertex write them (`msg_…`). Some
+    /// gateways give every response the same short ID (`ocgo`).
+    public var messageIDIsUnique = false
+    /// FNV-1a hash of the entry's `requestId`, or 0 when the line has none.
+    public var requestID: UInt64 = 0
     /// FNV-1a hash of the entry's own `uuid`, or 0 when the line has none.
     public var entryID: UInt64 = 0
     public var usage: TokenCounts?
@@ -56,6 +61,21 @@ public struct TranscriptLine: Sendable, Equatable {
     public var speed: Speed = .standard
 
     public init() {}
+
+    /// What tells this line's response from every other: its ID when that's one of a kind, else the ID with the
+    /// request's, or with the prompt's counts, which a response's content blocks repeat and the next response
+    /// outgrows. Nil for a line with no ID, and for a repeat whose prompt counts are zeroed.
+    public var responseKey: UInt64? {
+        guard messageID != 0 else { return nil }
+        if messageIDIsUnique { return messageID }
+        if requestID != 0 { return mix(messageID, requestID) }
+        guard let usage, usage.input + usage.cacheRead + usage.cacheWrite > 0 else { return nil }
+        return mix(messageID, UInt64(usage.input), UInt64(usage.cacheRead), UInt64(usage.cacheWrite))
+    }
+
+    private func mix(_ values: UInt64...) -> UInt64 {
+        values.withUnsafeBytes { fnv1a($0.baseAddress!.assumingMemoryBound(to: UInt8.self), count: $0.count) }
+    }
 
     /// Parses one JSON object from a transcript line. Returns nil for malformed or truncated lines.
     public static func parse(_ bytes: UnsafeRawBufferPointer) -> TranscriptLine? {
@@ -112,6 +132,9 @@ struct LineParser {
             } else if matches(key, "uuid"), i < end, p[i] == quote {
                 guard let value = scanString() else { return nil }
                 line.entryID = fnv1a(p + value.lowerBound, count: value.count)
+            } else if matches(key, "requestId"), i < end, p[i] == quote {
+                guard let value = scanString() else { return nil }
+                if !value.isEmpty { line.requestID = fnv1a(p + value.lowerBound, count: value.count) }
             } else if matches(key, "isSidechain") {
                 line.isSidechain = i + 3 < end && p[i] == UInt8(ascii: "t")
                 if !skipValue() { return nil }
@@ -133,7 +156,10 @@ struct LineParser {
                 line.model = String(decoding: UnsafeBufferPointer(start: p + value.lowerBound, count: value.count), as: UTF8.self)
             } else if matches(key, "id"), i < end, p[i] == quote {
                 guard let value = scanString() else { return false }
-                line.messageID = fnv1a(p + value.lowerBound, count: value.count)
+                if !value.isEmpty {
+                    line.messageID = fnv1a(p + value.lowerBound, count: value.count)
+                    line.messageIDIsUnique = value.count >= 20
+                }
             } else if matches(key, "usage"), i < end, p[i] == lbrace {
                 guard parseUsage(into: &line) else { return false }
             } else if !skipValue() {

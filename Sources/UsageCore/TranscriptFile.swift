@@ -76,8 +76,8 @@ public struct FileRecord: Codable, Sendable, Equatable {
     /// Continued and forked sessions start with a verbatim copy of earlier history, so messages are
     /// keyed by their own IDs and counted once across all transcripts.
     public var messages: [UInt64: Int32] = [:]
-    /// Message ID hash → usage. Claude Code writes one line per content block and repeats the
-    /// response's usage on each, so keying by ID keeps every response exactly once.
+    /// Response key → usage. Claude Code writes one line per content block and repeats the response's usage
+    /// on each, so keying by response keeps every response exactly once.
     public var usage: [UInt64: UsageRecord] = [:]
     /// The model in use at the end of what's been read, for formats that name it once per turn rather
     /// than on every response.
@@ -121,7 +121,9 @@ public struct FileRecord: Codable, Sendable, Equatable {
                 if messages[key] == nil { messages[key] = bucket }
             }
         case .assistant:
-            let key = line.messageID != 0 ? line.messageID : lineKey
+            // A line whose ID is shared with other responses and whose prompt counts are zeroed is a repeat.
+            if line.messageID != 0, line.responseKey == nil { return }
+            let key = line.responseKey ?? lineKey
             let record = UsageRecord(bucket: bucket, model: line.model ?? "unknown", tokens: line.usage ?? TokenCounts(),
                                      cacheWriteHour: line.cacheWriteHour, speed: line.speed)
             // Earlier lines of a response carry partial output counts, and Claude Code sometimes

@@ -1,7 +1,8 @@
 import Foundation
 
-/// Cursor keeps token usage on its servers, so locally only conversations and messages can be counted
-/// (plus tokens on IDE messages that happen to record them).
+/// Cursor keeps token usage on its servers. Conversations and messages are counted from this Mac, and tokens
+/// from Cursor's usage events when one of its logins can read them (else from the IDE messages that happen
+/// to record them).
 ///
 /// - The CLI keeps each chat in `~/.cursor/chats/<hash>/<agent id>/store.db`: `meta` row `0` is hex-encoded
 ///   JSON with the chat's `createdAt`; `blobs` holds messages as JSON and the conversation's root as
@@ -13,18 +14,28 @@ public actor CursorSource: UsageSource {
     public nonisolated let chatsURL: URL
     public nonisolated let acpSessionsURL: URL
     public nonisolated let ideStateURL: URL
+    /// Where Cursor's usage events come from, or nil to count only what's on this Mac.
+    private nonisolated let server: CursorServerUsage?
+    private var serverAccounts: [String: CursorServerUsage.Account]?
+    private var serverFetch: Task<Void, Never>?
+    private var serverFetchedAt: Date?
     private var chats: [String: Chat] = [:]
     private var ide = Chat(id: "ide")
     /// The IDE's database is read whole, so while Cursor keeps writing to it, it's read at most once a
     /// minute; the next refresh after that picks up the rest.
     private var ideReadAt: Date?
 
+    /// Posted by the source when a fetch of Cursor's usage events brought something new, so Cursor is read again.
+    public static let serverUsageDidChange = Notification.Name("CursorSource.serverUsageDidChange")
+
     public init(chatsURL: URL = URL.home.appendingPathComponent(".cursor/chats"),
                 acpSessionsURL: URL? = nil,
-                ideStateURL: URL = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb")) {
+                ideStateURL: URL = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
+                server: CursorServerUsage? = nil) {
         self.chatsURL = chatsURL
         self.acpSessionsURL = acpSessionsURL ?? chatsURL.deletingLastPathComponent().appendingPathComponent("acp-sessions")
         self.ideStateURL = ideStateURL
+        self.server = server
     }
 
     public nonisolated var watchedPaths: [String] { [chatsURL.path, acpSessionsURL.path, ideStateURL.deletingLastPathComponent().path] }
@@ -52,13 +63,39 @@ public actor CursorSource: UsageSource {
             ide = chat
             ideReadAt = Date()
         }
+        if let server {
+            if serverAccounts == nil { serverAccounts = server.load() }
+            if serverFetch == nil, serverFetchedAt.map({ Date().timeIntervalSince($0) >= CursorServerUsage.interval }) ?? true {
+                serverFetchedAt = Date()
+                serverFetch = Task { await fetchServerUsage(server) }
+            }
+            if server.waits, let serverFetch { await serverFetch.value }
+        }
         return aggregate()
+    }
+
+    private func fetchServerUsage(_ server: CursorServerUsage) async {
+        defer { serverFetch = nil }
+        var accounts = serverAccounts ?? [:]
+        var changed = false
+        for login in server.logins() {
+            guard let updated = await CursorServerUsage.update(accounts[login.id], login: login, now: Date().timeIntervalSince1970),
+                  updated != accounts[login.id] else { continue }
+            accounts[login.id] = updated
+            changed = true
+        }
+        guard changed else { return }
+        serverAccounts = accounts
+        server.save(accounts)
+        NotificationCenter.default.post(name: Self.serverUsageDidChange, object: self)
     }
 
     public func rebuild(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
         chats = [:]
         ide = Chat(id: "ide")
         ideReadAt = nil
+        serverAccounts = nil
+        serverFetchedAt = nil
         return await refresh(progress: progress)
     }
 
@@ -66,11 +103,14 @@ public actor CursorSource: UsageSource {
 
     private func aggregate() -> UsageData {
         var data = UsageData()
+        // Cursor's own events cover what the IDE's messages record, and much more.
+        let events = (serverAccounts ?? [:]).values.flatMap(\.events)
         for chat in Array(chats.values) + [ide] {
             data.sessionStarts += chat.sessions
             for bucket in chat.messages.values { data.messageBuckets[bucket, default: 0] += 1 }
-            data.usage += chat.usage.values
+            if events.isEmpty { data.usage += chat.usage.values }
         }
+        data.usage += events.map { UsageRecord(bucket: FileRecord.bucket($0.time), model: $0.model, tokens: $0.tokens, cost: $0.cost) }
         data.transcriptCount = chats.count
         data.scannedAt = Date()
         return data

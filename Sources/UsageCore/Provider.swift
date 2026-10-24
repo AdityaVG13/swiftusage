@@ -23,6 +23,7 @@ public enum Provider: String, CaseIterable, Codable, Sendable, Identifiable {
     /// Position in the provider picker.
     public var order: Int { Self.allCases.firstIndex(of: self) ?? 0 }
 
-    /// Cursor keeps token usage on its servers; locally there are only chats and messages.
+    /// Cursor keeps token usage on its servers; locally there are only chats and messages, and its tokens are
+    /// known once its usage events have been fetched.
     public var recordsTokensLocally: Bool { self != .cursor }
 }

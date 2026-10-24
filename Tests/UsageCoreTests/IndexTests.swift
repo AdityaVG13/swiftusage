@@ -9,8 +9,8 @@ enum Lines {
         #"{"type":"user","uuid":"\#(uuid)","isSidechain":\#(sidechain),"message":{"role":"user","content":"hi"},"timestamp":"\#(time)"}"#
     }
 
-    static func assistant(_ time: String, id: String, model: String = "claude-opus-5-5", input: Int = 1, output: Int = 10, cacheRead: Int = 100, cacheWrite: Int = 1000, sidechain: Bool = false) -> String {
-        #"{"isSidechain":\#(sidechain),"message":{"model":"\#(model)","id":"\#(id)","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":\#(input),"output_tokens":\#(output),"cache_read_input_tokens":\#(cacheRead),"cache_creation_input_tokens":\#(cacheWrite)}},"type":"assistant","timestamp":"\#(time)"}"#
+    static func assistant(_ time: String, id: String, model: String = "claude-opus-5-5", input: Int = 1, output: Int = 10, cacheRead: Int = 100, cacheWrite: Int = 1000, sidechain: Bool = false, request: String? = nil) -> String {
+        #"{\#(request.map { #""requestId":"\#($0)","# } ?? "")"isSidechain":\#(sidechain),"message":{"model":"\#(model)","id":"\#(id)","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":\#(input),"output_tokens":\#(output),"cache_read_input_tokens":\#(cacheRead),"cache_creation_input_tokens":\#(cacheWrite)}},"type":"assistant","timestamp":"\#(time)"}"#
     }
 
     static func attachment(_ time: String) -> String {
@@ -208,6 +208,57 @@ struct IndexTests {
         #expect(stats.sessions == 3)
         #expect(stats.messages == 9)
         #expect(stats.totalTokens == 4 * (1 + 10 + 100 + 1000))
+    }
+
+    @Test func responsesSharingAGatewaysIDCountOnceEach() async throws {
+        let projects = try TempProjects()
+        // A gateway gives every response the same short ID. Without request IDs, a response's blocks share its
+        // prompt counts; a block repeated with them zeroed adds nothing.
+        try projects.write("-p/s1.jsonl", [
+            Lines.user("2026-10-18T10:00:00Z"),
+            Lines.assistant("2026-10-18T10:00:05Z", id: "ocgo", input: 100, output: 5, cacheRead: 0, cacheWrite: 0),
+            Lines.assistant("2026-10-18T10:00:06Z", id: "ocgo", input: 100, output: 25, cacheRead: 0, cacheWrite: 0),
+            Lines.assistant("2026-10-18T10:00:07Z", id: "ocgo", input: 0, output: 0, cacheRead: 0, cacheWrite: 0),
+            Lines.user("2026-10-18T10:01:00Z"),
+            Lines.assistant("2026-10-18T10:01:05Z", id: "ocgo", input: 300, output: 1, cacheRead: 0, cacheWrite: 0),
+        ])
+        try projects.write("-p/s2.jsonl", [
+            Lines.user("2026-10-18T11:00:00Z"),
+            Lines.assistant("2026-10-18T11:00:05Z", id: "ocgo", input: 200, output: 1, cacheRead: 0, cacheWrite: 0),
+        ])
+        // With request IDs, each request is a response, however alike their counts.
+        try projects.write("-p/s3.jsonl", [
+            Lines.user("2026-10-18T12:00:00Z"),
+            Lines.assistant("2026-10-18T12:00:05Z", id: "ocgo", input: 100, output: 1, cacheRead: 0, cacheWrite: 0, request: "req_1"),
+            Lines.assistant("2026-10-18T12:00:06Z", id: "ocgo", input: 100, output: 1, cacheRead: 0, cacheWrite: 0, request: "req_2"),
+        ])
+
+        let data = await UsageIndex(projectsURL: projects.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.totalTokens == 125 + 301 + 201 + 2 * 101)
+        #expect(stats.messages == 4 + 5)
+    }
+
+    @Test func everyOtherClaudeConfigFolderIsReadOnce() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent("usagegraphs-home-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: home) }
+        for folder in [".claude/projects/-p", ".claude-work/projects", ".config/claude/projects", "elsewhere/projects", ".claude-empty"] {
+            try fm.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        // A second name for the default folder, and the default folder's settings file beside it.
+        try fm.createSymbolicLink(at: home.appendingPathComponent(".claude_personal"), withDestinationURL: home.appendingPathComponent(".claude"))
+        try Data("{}".utf8).write(to: home.appendingPathComponent(".claude.json"))
+        let root = home.appendingPathComponent(".claude/projects")
+        let others = ClaudeTranscripts.otherRoots(of: root, home: home, remembered: [home.path + "/elsewhere", "~/nowhere", home.path + "/.claude-work"])
+        #expect(others == ["elsewhere", ".claude-work", ".config/claude"].map { home.appendingPathComponent($0 + "/projects") })
+
+        let projects = home.appendingPathComponent(".claude-work/projects")
+        try Data((Lines.assistant("2026-10-18T10:00:05Z", id: "msg_0123456789abcdefghijkl") + "\n").utf8).write(to: projects.appendingPathComponent("s.jsonl"))
+        try fm.createDirectory(at: projects.appendingPathComponent("-p"), withIntermediateDirectories: true)
+        try fm.moveItem(at: projects.appendingPathComponent("s.jsonl"), to: projects.appendingPathComponent("-p/s.jsonl"))
+        try Data((Lines.assistant("2026-10-18T10:00:05Z", id: "msg_0123456789abcdefghijkl") + "\n").utf8).write(to: root.appendingPathComponent("-p/s.jsonl"))
+        #expect(Set(ClaudeTranscripts.discover(in: root, others: others).keys) == ["-p/s.jsonl", projects.path + "/-p/s.jsonl"])
     }
 
     @Test func manyCopiedPairsDeduplicateWithoutQuadraticScan() async throws {

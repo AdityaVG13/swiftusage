@@ -198,7 +198,7 @@ enum Dump {
     static func run(provider only: Provider?, cold: Bool, json: Bool) {
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            let sources = UsageSources.all(cached: !cold, readOnly: true)
+            let sources = UsageSources.all(cached: !cold, readOnly: true, waitingForServers: true)
             if json {
                 let target = only ?? .claude
                 let source = sources.first { $0.provider == target }!

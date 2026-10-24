@@ -37,7 +37,7 @@ struct LimitsView: View {
 
     private var spend: some View {
         let spend = store.spend(for: provider)
-        let counts = provider?.recordsTokensLocally ?? true
+        let counts = store.countsTokens(provider)
         func value(_ dollars: Double?) -> String { counts ? dollars.map(Format.dollars) ?? "–" : "–" }
         return Grid(horizontalSpacing: Theme.Layout.spacing) {
             GridRow {

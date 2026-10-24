@@ -119,7 +119,7 @@ private struct ProvidersPage: View {
     private func detail(_ provider: Provider) -> String {
         guard preferences.isShown(provider) else { return "Off" }
         if store.providersWithData.contains(provider), let stats = store.stats[provider]?[.all] {
-            return provider.recordsTokensLocally ? "\(Format.compact(stats.totalTokens)) tokens" : "\(Format.compact(Int64(stats.messages))) messages"
+            return store.countsTokens(provider) ? "\(Format.compact(stats.totalTokens)) tokens" : "\(Format.compact(Int64(stats.messages))) messages"
         }
         let accounts = limits.accounts.filter { $0.provider == provider }.count
         if accounts > 0 { return accounts == 1 ? "Signed in" : "\(accounts) accounts" }

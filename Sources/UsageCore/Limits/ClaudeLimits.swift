@@ -3,7 +3,7 @@ import Foundation
 /// Claude's session, weekly and per-model limits, for every Claude Code login on this Mac: the default
 /// config folder (`~/.claude`), every folder `$CLAUDE_CONFIG_DIR` has named, and any other `~/.claude*` or
 /// `~/.config/claude*` folder used as one, such as `~/.claude_personal` for a second account, then Claude
-/// Desktop's login for an account none of them has.
+/// Desktop's login for an account none of them has, or to fill in one whose reading failed.
 ///
 /// Claude Code keeps each folder's login in the keychain as `Claude Code-credentials`, with
 /// `-<first 8 hex digits of SHA-256(folder)>` appended for folders set through `CLAUDE_CONFIG_DIR`, or in
@@ -34,8 +34,10 @@ public struct ClaudeLimits: LimitsSource {
         let logins = Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR"))
         let readings = await LimitsSources.readings(of: logins, id: \.id, read: Self.limits(for:))
         let served = Set(readings.filter(\.hasValues).map(\.id))
-        let accounts = Set(logins.filter { served.contains($0.id) }.compactMap { $0.accountID.split(separator: "|").first.map(String.init) })
-        return readings + (await ClaudeDesktop.limits(skippingAccounts: accounts, ids: served))
+        func accounts(_ logins: [Login]) -> Set<String> {
+            Set(logins.compactMap { $0.accountID.split(separator: "|").first.map(String.init) })
+        }
+        return readings + (await ClaudeDesktop.limits(served: accounts(logins.filter { served.contains($0.id) }), signedIn: accounts(logins), ids: served))
     }
 
     private static func limits(for login: Login) async -> AccountLimits {

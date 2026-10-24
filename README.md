@@ -13,7 +13,7 @@
 
 SwiftUsage is a macOS menu bar app that shows your coding agents' usage: sessions, messages, total tokens, what those tokens would cost at API rates, active days, peak hour, favorite model, a GitHub-style activity heatmap, and a per-model breakdown for all time, the last 30 days, or the last 7 days. Pick one provider or see them all together.
 
-Usage history is read locally from each tool's own files and never leaves your Mac. Limits are the exception: they come from each provider's own usage API, signed in with the login its tool already keeps on this Mac (see [Limits](#limits)).
+Usage history is read locally from each tool's own files and never leaves your Mac. Two things come from the providers instead, each asked with the login its tool already keeps on this Mac: limits, from each provider's own usage API (see [Limits](#limits)), and Cursor's tokens, which only Cursor's servers keep.
 
 ## Install
 
@@ -27,7 +27,7 @@ The app is signed with a Developer ID and notarized by Apple; the first time it 
 
 SwiftUsage updates itself. Once a day it reads the latest release's `feed.json` from GitHub (the request carries nothing about your usage), downloads a newer version in the background, and then opens a window offering Install and Relaunch, Remind Me Later (asks again a day later) or Skip This Version. ⋯ → Check for Updates… looks right away, and Customize → General turns the daily check off. An update installs only if it's signed with the same Developer ID as the copy you have, notarized by Apple, the version the release names and newer; it replaces the app in one step and reopens it, and settings and the saved history carry over. A copy opened straight from the disk image or Downloads can't replace itself, so its window offers the download instead. You can always update by hand too: quit SwiftUsage (⋯ → Quit SwiftUsage) and drag the new version over the old one.
 
-To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, a downloaded update waiting to be installed, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
+To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, Cursor's usage events, a downloaded update waiting to be installed, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
 
 ## The panel
 
@@ -67,9 +67,9 @@ Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, 
 
 | Provider | Read from |
 | --- | --- |
-| Codex | `$CODEX_HOME` or `~/.codex`: `sessions/**/rollout-*.jsonl[.zst]` and `archived_sessions/` |
-| Claude Code | `$CLAUDE_CONFIG_DIR` or `~/.claude`: `projects/*/*.jsonl` |
-| Cursor | `~/.cursor/chats/*/*/store.db` (CLI) and Cursor's `state.vscdb` (IDE) |
+| Codex | `$CODEX_HOME`, or else `~/.codex` and every other home (`~/.config/codex`, side-by-side homes such as `~/.codex-work`): `sessions/**/rollout-*.jsonl[.zst]` and `archived_sessions/` |
+| Claude Code | `$CLAUDE_CONFIG_DIR`, or else `~/.claude` and every other config folder (`~/.claude*` such as `~/.claude_personal`, `~/.config/claude*`): `projects/*/*.jsonl` |
+| Cursor | `~/.cursor/chats/*/*/store.db` (CLI) and Cursor's `state.vscdb` (IDE); tokens from Cursor's usage events |
 | Grok | `$GROK_HOME` or `~/.grok`: `sessions/*/*/updates.jsonl` |
 | OpenCode | `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`: `opencode*.db` |
 | Antigravity | `~/.gemini/antigravity*/conversations/*.db` |
@@ -77,11 +77,11 @@ Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, 
 | Pi | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`: `sessions/*/*.jsonl` |
 | Devin | `~/.local/share/devin`: `cli/sessions.db` and `cli-next/sessions.db` |
 
-The variables are read from the app's own environment. Opened from Finder or at login, it doesn't see ones set in a shell profile such as `~/.zshrc`, so it reads the default folder; `launchctl setenv CLAUDE_CONFIG_DIR ~/somewhere` passes one to apps opened after it, until you log out.
+The variables are read from the app's own environment. Opened from Finder or at login, it doesn't see ones set in a shell profile such as `~/.zshrc`, so it reads the default folder. For Claude Code and Codex that means every folder beside it too, and every folder `CLAUDE_CONFIG_DIR` or `CODEX_HOME` has named when the app was opened from a shell; a folder that's another's through a symlink is read once. `launchctl setenv CLAUDE_CONFIG_DIR ~/somewhere` passes one to apps opened after it, until you log out, and then only that folder is read.
 
 Some history can't be counted:
 
-- **Cursor** keeps token counts on its servers, so only its chats and messages are counted, and its tokens show as "–".
+- **Cursor** keeps token counts on its servers. Its chats and messages are counted on this Mac, and its tokens and their cost come from the usage events its dashboard lists, asked for with the login Cursor keeps (which is only read, never renewed) at most every five minutes: the whole history the first time, then the last two days, and kept in the cache folder. Until a login can read them, its tokens show as "–".
 - **Antigravity** conversations from before its SQLite format are encrypted `.pb` files and are skipped.
 - **Muse Code** wasn't installed when its reader was written, so the reader follows the usage events Muse's SDK reports and hasn't been checked against a real log.
 
@@ -92,7 +92,7 @@ Each provider is asked for its limits every five minutes (Customize → General 
 | Provider | Login read from | Shows |
 | --- | --- | --- |
 | Codex | `auth.json` in `$CODEX_HOME`, `~/.codex`, `~/.config/codex` and side-by-side homes such as `~/.codex-work` | Session, Weekly (or Monthly on Free), Spark, credits, limit resets |
-| Claude Code | the keychain (`Claude Code-credentials`) or `.credentials.json`, for `~/.claude` and every other config folder such as `~/.claude_personal`; then Claude Desktop's login for an account none of them has | Session, Weekly, per-model weekly (Fable), extra usage, limit resets |
+| Claude Code | the keychain (`Claude Code-credentials`) or `.credentials.json`, for `~/.claude` and every other config folder such as `~/.claude_personal`; then Claude Desktop's login for an account none of them has, or to fill in one whose reading failed | Session, Weekly, per-model weekly (Fable), extra usage, limit resets |
 | Cursor | Cursor's `state.vscdb` | Included usage, Cursor and other models, on-demand; requests for team and enterprise plans |
 | Grok | `~/.grok/auth.json` | Weekly pool, pay-as-you-go cap |
 | OpenCode | OpenCode Go's key in `auth.json` or its database | Session, Weekly, Monthly |
@@ -100,7 +100,7 @@ Each provider is asked for its limits every five minutes (Customize → General 
 | Pi | `~/.pi/agent/auth.json` | the Claude, ChatGPT and Grok subscriptions Pi is signed in to |
 | Devin | `~/.local/share/devin/credentials.toml` | Daily and weekly quota, extra usage balance |
 
-Each Claude login is its own card, named after its organization ("Personal" for the one Anthropic makes for each person). An account several tools are signed in to (Pi on your Claude subscription, say) is one card, marked "Also used by Pi". Claude Desktop keeps its login encrypted with a key macOS guards, so its card asks first: Allow Access… shows macOS's prompt once, and "Always Allow" keeps it silent after that. Antigravity's access tokens last an hour; a new one is fetched with the login's refresh token, which Google doesn't rotate, and kept in memory only. The app's login and `agy`'s for the same Google account are one card. Accounts on a paid plan get the summary of their shared pools; others, which Google turns away from that summary, get each model's quota pooled the same way. Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
+Each Claude login is its own card, named after its organization ("Personal" for the one Anthropic makes for each person). An account several tools are signed in to (Pi on your Claude subscription, say) is one card, marked "Also used by Pi". Claude Desktop's login never gets a card of its own: an account Claude Code is signed in to as well stays that one card, and one only Desktop has is named like any other. Desktop keeps its login encrypted with a key macOS guards, so that account's card asks first: Allow Access… shows macOS's prompt once, and "Always Allow" keeps it silent after that. Antigravity's access tokens last an hour; a new one is fetched with the login's refresh token, which Google doesn't rotate, and kept in memory only. The app's login and `agy`'s for the same Google account are one card. Accounts on a paid plan get the summary of their shared pools; others, which Google turns away from that summary, get each model's quota pooled the same way. Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
 
 Codex and Claude hand out limit resets now and then, each of which refills the session and weekly limits at once (the monthly one on ChatGPT Free). The card shows how many an account has and when the next one lapses, and Use a Reset… spends one after you confirm, with the same request the Codex CLI and Claude Code send: Codex's first to lapse, or the Claude grant Anthropic names as next. It's the only request the app makes that changes anything. Each one carries an ID the provider tells repeats apart by, and if its answer gets lost, trying again sends the same ID, even after the app restarts, so it can't use a second reset.
 

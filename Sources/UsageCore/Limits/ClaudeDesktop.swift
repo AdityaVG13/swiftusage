@@ -2,10 +2,10 @@ import CommonCrypto
 import Foundation
 import Security
 
-/// The login Claude Desktop keeps, for accounts no Claude Code folder is signed in to: an access token per
-/// organization in `config.json`'s `oauth:tokenCacheV2`, encrypted the way Electron encrypts its storage,
-/// with a key in the keychain item "Claude Safe Storage". Only the access token is read; Desktop renews
-/// it itself.
+/// The login Claude Desktop keeps, for an account no Claude Code folder is signed in to, or one whose Claude
+/// Code login couldn't be read: an access token per organization in `config.json`'s `oauth:tokenCacheV2`,
+/// encrypted the way Electron encrypts its storage, with a key in the keychain item "Claude Safe Storage".
+/// Only the access token is read; Desktop renews it itself.
 ///
 /// The keychain item belongs to Claude Desktop, so macOS asks before another app can read it, until the
 /// person chooses Always Allow. That only happens when they ask for it from the account's card; every other
@@ -15,6 +15,9 @@ public enum ClaudeDesktop {
     /// Claude Desktop's own client, whose tokens can read limits.
     private static let desktopClient = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let storageItem = Keychain.Item(service: "Claude Safe Storage", account: "Claude Key")
+    /// The cards each Desktop account was read under, with their names, so a login that can't be read later
+    /// still shows as the account it is.
+    private static let names = Remembered<[String: String]>(Remembered<[String: String]>.inCaches("claude-desktop-accounts.json"))
 
     enum StorageKey: Equatable {
         case key(String)
@@ -68,37 +71,57 @@ public enum ClaudeDesktop {
         }
     }
 
-    static func limits(skippingAccounts known: Set<String>, ids seen: Set<String>) async -> [AccountLimits] {
-        guard let config = JSONValue.object(file: folder.appendingPathComponent("config.json")),
-              let account = (config["lastKnownAccountUuid"] as? String)?.lowercased(),
+    /// Desktop's account's limits, unless a Claude Code login of the account was read (`served`). An account a
+    /// Claude Code login has (`signedIn`) already has its card, which says what's wrong with that login, so
+    /// Desktop only fills it in, and only when its own login can be read without asking.
+    static func limits(served: Set<String>, signedIn: Set<String>, ids seen: Set<String>) async -> [AccountLimits] {
+        guard let config = JSONValue.object(file: folder.appendingPathComponent("config.json")) else { return [] }
+        return await limits(config: config, served: served, signedIn: signedIn, ids: seen,
+                            storageKey: { storageKey(asking: false) }, names: names)
+    }
+
+    static func limits(config: [String: Any], served: Set<String>, signedIn: Set<String>, ids seen: Set<String>,
+                       storageKey: () -> StorageKey, names: Remembered<[String: String]>) async -> [AccountLimits] {
+        guard let account = (config["lastKnownAccountUuid"] as? String)?.lowercased(),
               config["oauth:tokenCacheV2"] != nil || config["oauth:tokenCache"] != nil,
-              !known.contains(account) else { return [] }
-        let waiting = "claude-desktop:" + account
+              !served.contains(account) else { return [] }
+        let ownsCard = !signedIn.contains(account)
+        var known = names[account] ?? [:]
+        // The cards the account was read under before, under their names, saying why it can't be now.
+        func unread(_ problem: String, action: LimitAction? = nil) -> [AccountLimits] {
+            guard ownsCard else { return [] }
+            return known.sorted { $0.key < $1.key }.map { AccountLimits(id: $0.key, provider: .claude, account: $0.value, problem: problem, action: action) }
+        }
         let key: String
-        switch storageKey(asking: false) {
+        switch storageKey() {
         case .missing:
             return []
         case .needsPermission:
-            return [AccountLimits(id: waiting, provider: .claude, account: "Claude Desktop",
-                                  problem: "To see these limits, allow access to Claude Desktop's login and choose Always Allow.", action: .allowClaudeDesktop)]
+            let problem = "To see these limits, allow access to Claude Desktop's login and choose Always Allow."
+            let cards = unread(problem, action: .allowClaudeDesktop)
+            // Before its first reading nothing names the account, so the card says where it's signed in.
+            guard ownsCard, cards.isEmpty else { return cards }
+            return [AccountLimits(id: "claude-desktop:" + account, provider: .claude,
+                                  problem: "Claude Desktop is signed in to an account Claude Code isn't. " + problem, action: .allowClaudeDesktop)]
         case .key(let found):
             key = found
         }
 
         let logins = logins(config: config, key: key, account: account)
-        guard !logins.isEmpty else {
-            return [.failed(waiting, .claude, account: "Claude Desktop", "Claude Desktop's login has expired. Open Claude Desktop to renew it.")]
-        }
+        // Desktop renews its login while it's open. An account never read can't be named, so it has no card.
+        guard !logins.isEmpty else { return unread("Login expired. Open Claude Desktop to renew it.") }
         var results: [AccountLimits] = []
         var seen = seen
         for login in logins {
             let profile = await AnthropicUsage.shared.profile(token: login.token)
             let id = profile?.id ?? "claude:\(account)|\(login.organization)"
             guard seen.insert(id).inserted else { continue }
-            results.append(await AnthropicUsage.shared.limits(id: id, provider: .claude, account: profile?.label ?? "Claude Desktop", token: login.token,
+            if let label = profile?.label { known[id] = label }
+            results.append(await AnthropicUsage.shared.limits(id: id, provider: .claude, account: known[id], token: login.token,
                                                               renew: "Open Claude Desktop to renew it.",
                                                               plan: ClaudeLimits.plan(login.subscription, login.tier)))
         }
+        if !known.isEmpty { names.set(known, for: account) }
         return results
     }
 

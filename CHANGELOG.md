@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Cursor's tokens are counted: they come from the usage events Cursor's dashboard lists, asked for with the login Cursor keeps, with the cost Cursor priced each request at. The first fetch reads the whole history; later ones the last two days.
+- Claude Code's and Codex's usage is read from every config folder, as their limits are: `~/.claude_personal`, `~/.config/claude` and other Claude Code folders, and Codex homes such as `~/.codex-work`. When `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, only that folder is read.
+- Claude Code responses through a gateway that gives every response the same ID count once each, rather than all together as one.
+- A Codex subagent's own work counts when its turns don't carry the time they started (`rollout-5`, a task inside a turn), where it was left out. History a fork replays under such a turn counts once, under its parent.
+- A Codex usage snapshot sent again later in a rollout no longer counts as another response.
+- A Codex rollout written out in one go, with every line stamped when its thread started, counts on the days its turns ran.
+- A Codex Desktop thread whose early history was rewritten down to its compaction markers counts that history again, from the total Codex kept, spread over the compactions.
+- A Codex response logged before its turn names the model takes that turn's model, so it's priced instead of listed as unknown.
+- Claude Desktop's login no longer shows as a card named "Claude Desktop". An account a Claude Code folder is signed in to keeps its one card, which Desktop's login fills in when Claude Code's can't be read, and Desktop's expired login or missing permission no longer adds a second one. An account only Desktop has is named after its organization or email, and keeps that name when Desktop's login later expires or can't be read.
+- The first launch reads Claude Code's and Codex's history again to apply these; summaries of deleted transcripts are kept.
+
 ## 1.1.0
 
 - SwiftUsage updates itself: it downloads a new version in the background and asks before installing it.

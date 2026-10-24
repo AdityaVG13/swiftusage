@@ -130,8 +130,8 @@ public struct CursorLimits: LimitsSource {
         var result = Self.limits(usage, planInfo: planInfo, id: id, account: email, plan: plan, remembered: answered == nil ? HTTP.now() : nil)
         if !result.meters.contains(where: { $0.id == "total" || $0.id == "auto" }) {
             // Team and enterprise plans report through the dashboard's own endpoints instead.
-            let user = Self.subject(token).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
-            let cookie = ["Cookie": "WorkosCursorSessionToken=\(user)%3A%3A\(token)", "Accept": "application/json"]
+            let user = Self.dashboardUser(token)
+            let cookie = ["Cookie": "WorkosCursorSessionToken=" + Self.dashboardSession(token), "Accept": "application/json"]
             async let summary = HTTP.get("https://cursor.com/api/usage-summary", headers: cookie)
             let requests = await HTTP.get("https://cursor.com/api/usage?user=" + (user.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? user), headers: cookie)
             let dashboard = Self.dashboard(summary: await summary?.json, requests: requests?.json)
@@ -155,6 +155,27 @@ public struct CursorLimits: LimitsSource {
         async let planResponse = HTTP.post(api + "GetPlanInfo", headers: headers, json: [String: Any](), timeout: 20)
         let usageResponse = await HTTP.post(api + "GetCurrentPeriodUsage", headers: headers, json: [String: Any](), timeout: 20)
         return (await planResponse, usageResponse)
+    }
+
+    /// The user the dashboard knows a token's account by: its subject without the identity provider.
+    private static func dashboardUser(_ token: String) -> String {
+        subject(token).map { $0.split(separator: "|").last.map(String.init) ?? $0 } ?? ""
+    }
+
+    /// The value of the dashboard's session cookie for an access token: `<user>%3A%3A<token>`.
+    static func dashboardSession(_ token: String) -> String {
+        dashboardUser(token) + "%3A%3A" + token
+    }
+
+    /// One dashboard session per account whose access token hasn't expired, under the ID its limits card has.
+    static func dashboardLogins(home: URL = .home) -> [CursorServerUsage.Login] {
+        var seen: Set<String> = []
+        return logins(home: home).logins.compactMap { login in
+            guard let token = login.access, JWT.expiry(token).map({ $0 >= HTTP.now() }) ?? true else { return nil }
+            let id = "cursor:" + (subject(token) ?? login.subject ?? "default")
+            guard seen.insert(id).inserted else { return nil }
+            return CursorServerUsage.Login(id: id, session: dashboardSession(token))
+        }
     }
 
     private static func subject(_ token: String?) -> String? {

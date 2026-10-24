@@ -49,7 +49,7 @@ struct PanelView: View {
             ShownLayout(shown: state.tab == .limits ? 1 : 0) {
                 HeldWhileHidden(shown, visible: state.tab == .overview) { shown in
                     GlassEffectContainer(spacing: 0) {
-                        OverviewView(stats: shown.stats, countsTokens: shown.provider?.recordsTokensLocally ?? true, heatmapID: shown.id)
+                        OverviewView(stats: shown.stats, countsTokens: store.countsTokens(shown.provider), heatmapID: shown.id)
                     }
                 }
                 .tabVisible(state.tab == .overview)

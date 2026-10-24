@@ -21,15 +21,22 @@ struct ProviderTests {
         json(["timestamp": time, "type": "event_msg", "payload": ["type": "token_count", "info": ["last_token_usage": last, "total_token_usage": total]]])
     }
 
+    /// A UUIDv7 made at `time`, as Codex names threads and turns.
+    private func uuid7(_ time: String, _ tail: UInt64 = 0) -> String {
+        let hex = String(UInt64(Timestamp.parse(time)! * 1000), radix: 16)
+        let padded = String(repeating: "0", count: 12 - hex.count) + hex
+        return "\(padded.prefix(8))-\(padded.suffix(4))-7000-8000-\(String(format: "%012x", tail))"
+    }
+
     @Test func codexCountsEachResponseOnceAndSkipsForkReplays() async throws {
         let home = try TempProjects()
-        let thread = "01a00000-0000-7000-8000-000000000001"
-        let fork = "01b00000-0000-7000-8000-000000000002"
+        let thread = uuid7("2026-10-18T10:00:00Z", 1)
+        let fork = uuid7("2026-10-18T11:00:00Z", 2)
         let first = codexUsage(1000, cached: 600, output: 50)
         let second = codexUsage(2000, cached: 1500, output: 70)
         try home.write("sessions/2026/10/18/rollout-2026-10-18T10-00-00-\(thread).jsonl", [
             json(["timestamp": "2026-10-18T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z", "source": "cli"]]),
-            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": uuid7("2026-10-18T10:00:01Z"), "model": "gpt-5.5"]]),
             json(["timestamp": "2026-10-18T10:00:02Z", "type": "event_msg", "payload": ["type": "item_completed", "item": ["type": "UserMessage", "id": "item-1"]]]),
             codexTokenCount("2026-10-18T10:00:03Z", last: first, total: first),
             // Repeated with nothing new: not another response.
@@ -40,10 +47,10 @@ struct ProviderTests {
         try home.write("archived_sessions/rollout-2026-10-18T11-00-00-\(fork).jsonl", [
             json(["timestamp": "2026-10-18T11:00:00Z", "type": "session_meta", "payload": ["id": fork, "timestamp": "2026-10-18T11:00:00Z", "forked_from_id": thread]]),
             json(["timestamp": "2026-10-18T11:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z"]]),
-            json(["timestamp": "2026-10-18T11:00:00Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            json(["timestamp": "2026-10-18T11:00:00Z", "type": "turn_context", "payload": ["turn_id": uuid7("2026-10-18T10:00:01Z"), "model": "gpt-5.5"]]),
             json(["timestamp": "2026-10-18T11:00:00Z", "type": "event_msg", "payload": ["type": "item_completed", "item": ["type": "UserMessage", "id": "item-1"]]]),
             codexTokenCount("2026-10-18T11:00:00Z", last: first, total: first),
-            json(["timestamp": "2026-10-18T11:00:01Z", "type": "turn_context", "payload": ["turn_id": "01b00000-0001-7000-8000-000000000000", "model": "gpt-6"]]),
+            json(["timestamp": "2026-10-18T11:00:01Z", "type": "turn_context", "payload": ["turn_id": uuid7("2026-10-18T11:00:01Z"), "model": "gpt-6"]]),
             json(["timestamp": "2026-10-18T11:00:02Z", "type": "event_msg", "payload": ["type": "item_completed", "item": ["type": "UserMessage", "id": "item-1"]]]),
             json(["timestamp": "2026-10-18T11:00:03Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": fork, "response_id": "resp_1", "usage": codexUsage(500, cached: 100, output: 10)]]),
             codexTokenCount("2026-10-18T11:00:04Z", last: codexUsage(500, cached: 100, output: 10), total: codexUsage(9999, cached: 0, output: 1)),
@@ -62,11 +69,11 @@ struct ProviderTests {
 
     @Test func codexCountWrittenBeforeItsRecordIsOneResponse() async throws {
         let home = try TempProjects()
-        let thread = "01a00000-0000-7000-8000-000000000001"
+        let thread = uuid7("2026-10-18T10:00:00Z", 1)
         let usage = codexUsage(100, cached: 0, output: 10)
         try home.write("sessions/2026/10/18/rollout-x-\(thread).jsonl", [
             json(["timestamp": "2026-10-18T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z"]]),
-            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": uuid7("2026-10-18T10:00:01Z"), "model": "gpt-5.5"]]),
             codexTokenCount("2026-10-18T10:00:03Z", last: usage, total: usage),
             json(["timestamp": "2026-10-18T10:00:04Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread, "response_id": "r1", "usage": usage]]),
             codexTokenCount("2026-10-18T10:00:05Z", last: usage, total: usage),
@@ -78,7 +85,7 @@ struct ProviderTests {
         let first = codexUsage(100, cached: 0, output: 10), second = codexUsage(200, cached: 0, output: 20)
         try home.write("sessions/2026/10/18/rollout-y-\(thread).jsonl", [
             json(["timestamp": "2026-10-18T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-18T10:00:00Z"]]),
-            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": "01a00000-0001-7000-8000-000000000000", "model": "gpt-5.5"]]),
+            json(["timestamp": "2026-10-18T10:00:01Z", "type": "turn_context", "payload": ["turn_id": uuid7("2026-10-18T10:00:01Z"), "model": "gpt-5.5"]]),
             codexTokenCount("2026-10-18T10:00:02Z", last: first, total: first),
             codexTokenCount("2026-10-18T10:00:03Z", last: second, total: codexUsage(300, cached: 0, output: 30)),
             json(["timestamp": "2026-10-18T10:00:04Z", "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread, "response_id": "r1", "usage": first]]),
@@ -87,6 +94,161 @@ struct ProviderTests {
         try FileManager.default.removeItem(at: home.root.appendingPathComponent("sessions/2026/10/18/rollout-x-\(thread).jsonl"))
         let both = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
         #expect(both.usage.map(\.tokens.total).sorted() == [110, 220])
+    }
+
+    private func codexMeta(_ id: String, _ time: String, tree: String? = nil, subagentOf parent: String? = nil, forkOf forked: String? = nil) -> String {
+        var payload: [String: Any] = ["id": id, "session_id": tree ?? id, "timestamp": time]
+        if let parent { payload["source"] = ["subagent": ["thread_spawn": ["parent_thread_id": parent]]] }
+        if let forked { payload["forked_from_id"] = forked }
+        return json(["timestamp": time, "type": "session_meta", "payload": payload])
+    }
+
+    private func codexTurn(_ time: String, _ id: String?, task: Bool = false) -> String {
+        var payload: [String: Any] = task ? ["type": "task_started"] : ["model": "gpt-5.5"]
+        if let id { payload["turn_id"] = id }
+        return json(["timestamp": time, "type": task ? "event_msg" : "turn_context", "payload": payload])
+    }
+
+    @Test func codexSubagentTurnsThatDontDateThemselvesCount() async throws {
+        // Codex 0.98 named a subagent's turns `rollout-5`, and its turn contexts had no ID. It replayed nothing.
+        let home = try TempProjects()
+        let parent = uuid7("2026-10-18T09:00:00Z", 1), thread = uuid7("2026-10-18T10:00:00Z", 2)
+        let first = codexUsage(1000, cached: 0, output: 10), second = codexUsage(2000, cached: 1000, output: 20)
+        try home.write("sessions/2026/10/18/rollout-2026-10-18T10-00-00-\(thread).jsonl", [
+            codexMeta(thread, "2026-10-18T10:00:00Z", subagentOf: parent),
+            codexTurn("2026-10-18T10:00:01Z", "rollout-5", task: true),
+            codexTurn("2026-10-18T10:00:01Z", nil),
+            codexTokenCount("2026-10-18T10:00:02Z", last: first, total: first),
+            codexTokenCount("2026-10-18T10:00:03Z", last: second, total: codexUsage(3000, cached: 1000, output: 30)),
+        ])
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.map(\.tokens.total).sorted() == [1010, 2020])
+    }
+
+    @Test func codexReplayInATurnThatDoesntDateItselfLandsOnItsParentsCount() async throws {
+        let home = try TempProjects()
+        let parent = uuid7("2026-10-17T10:00:00Z", 1), child = uuid7("2026-10-18T10:00:00Z", 2)
+        let first = codexUsage(1000, cached: 0, output: 10), second = codexUsage(2000, cached: 1000, output: 20)
+        let afterSecond = codexUsage(3000, cached: 1000, output: 30)
+        let own = codexUsage(4000, cached: 3000, output: 40)
+        try home.write("sessions/2026/10/17/rollout-2026-10-17T10-00-00-\(parent).jsonl", [
+            codexMeta(parent, "2026-10-17T10:00:00Z"),
+            codexTurn("2026-10-17T10:00:01Z", uuid7("2026-10-17T10:00:01Z")),
+            codexTokenCount("2026-10-17T10:00:02Z", last: first, total: first),
+            codexTokenCount("2026-10-17T10:00:03Z", last: second, total: afterSecond),
+        ])
+        // A subagent replays the parent's turn under `rollout-2`, and a fork under a UUIDv4, both stamped when
+        // they were made, then each has a turn of its own.
+        for (index, replayedTurn) in ["rollout-2", "816a6eab-d95e-4ccf-aec3-0e20073ab84a"].enumerated() {
+            let id = index == 0 ? child : uuid7("2026-10-18T10:30:00Z", 3)
+            try home.write("sessions/2026/10/18/rollout-2026-10-18T10-\(index)0-00-\(id).jsonl", [
+                index == 0 ? codexMeta(id, "2026-10-18T10:00:00Z", tree: parent, subagentOf: parent)
+                    : codexMeta(id, "2026-10-18T10:30:00Z", tree: parent, forkOf: parent),
+                codexTurn("2026-10-18T10:00:00Z", replayedTurn, task: true),
+                codexTokenCount("2026-10-18T10:00:00Z", last: first, total: first),
+                codexTokenCount("2026-10-18T10:00:00Z", last: second, total: afterSecond),
+                codexTurn("2026-10-18T10:40:00Z", uuid7("2026-10-18T10:40:00Z", UInt64(index))),
+                codexTokenCount("2026-10-18T10:40:01Z", last: own, total: codexUsage(7000 + index, cached: 4000, output: 70)),
+            ])
+        }
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.map(\.tokens.total).sorted() == [1010, 2020, 4040, 4040])
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        let day = utc.day(of: Timestamp.parse("2026-10-17T12:00:00Z")!)
+        #expect(stats.days[day]?.tokens == 3030)
+    }
+
+    @Test func codexSessionsWithTheSameFirstResponseBothCount() async throws {
+        let home = try TempProjects()
+        let usage = codexUsage(10520, cached: 4608, output: 20)
+        for (index, start) in ["2026-10-18T10:00:00Z", "2026-10-18T10:30:00Z"].enumerated() {
+            let id = uuid7(start, UInt64(index))
+            try home.write("sessions/2026/10/18/rollout-\(index)-\(id).jsonl", [
+                codexMeta(id, start),
+                codexTurn(start, uuid7(start, 9)),
+                codexTokenCount(start, last: usage, total: usage),
+            ])
+        }
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.map(\.tokens.total) == [10540, 10540])
+    }
+
+    @Test func codexCountSentAgainLaterIsntAnotherResponse() async throws {
+        let home = try TempProjects()
+        let thread = uuid7("2026-10-18T10:00:00Z")
+        let first = codexUsage(100, cached: 0, output: 10), second = codexUsage(200, cached: 100, output: 20)
+        try home.write("sessions/2026/10/18/rollout-\(thread).jsonl", [
+            codexMeta(thread, "2026-10-18T10:00:00Z"),
+            codexTurn("2026-10-18T10:00:01Z", uuid7("2026-10-18T10:00:01Z")),
+            codexTokenCount("2026-10-18T10:00:02Z", last: first, total: first),
+            codexTokenCount("2026-10-18T10:00:03Z", last: second, total: codexUsage(300, cached: 100, output: 30)),
+            // An earlier snapshot, sent again: the running total after it carries on from the latest one.
+            codexTokenCount("2026-10-18T10:00:04Z", last: first, total: first),
+            codexTokenCount("2026-10-18T10:00:05Z", last: first, total: codexUsage(400, cached: 100, output: 40)),
+        ])
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.map(\.tokens.total).sorted() == [110, 110, 220])
+    }
+
+    @Test func codexRolloutStampedAtItsStartIsDatedByItsTurns() async throws {
+        // Codex Desktop can write a subagent's rollout out in one go, every line stamped when the thread started.
+        let home = try TempProjects()
+        let thread = uuid7("2026-10-15T10:00:00Z")
+        let usage = codexUsage(1000, cached: 0, output: 10)
+        try home.write("sessions/2026/10/15/rollout-\(thread).jsonl", [
+            json(["timestamp": "2026-10-15T10:00:00Z", "type": "session_meta", "payload": ["id": thread, "timestamp": "2026-10-15T10:00:00Z", "thread_source": "subagent"]]),
+            codexTurn("2026-10-15T10:00:00Z", uuid7("2026-10-17T09:00:00Z")),
+            codexTurn("2026-10-15T10:00:00Z", "rollout-4", task: true),
+            codexTokenCount("2026-10-15T10:00:00Z", last: usage, total: usage),
+        ])
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.days[utc.day(of: Timestamp.parse("2026-10-17T09:00:00Z")!)]?.tokens == 1010)
+    }
+
+    @Test func codexHistoryRewrittenDownToItsCompactionsStillCounts() async throws {
+        // Codex Desktop can leave only the compaction markers of a thread's early history, and the first count left
+        // starts from the total they replaced. A subagent's first count starts from its parent's, which isn't its own.
+        let home = try TempProjects()
+        let thread = uuid7("2026-10-16T10:00:00Z", 1), child = uuid7("2026-10-17T12:00:00Z", 2)
+        for (index, (id, meta)) in [(thread, codexMeta(thread, "2026-10-16T10:00:00Z")),
+                                    (child, codexMeta(child, "2026-10-17T12:00:00Z", tree: thread, subagentOf: thread))].enumerated() {
+            let own = codexUsage(1000 * (index + 1), cached: 0, output: 10)
+            try home.write("sessions/2026/10/16/rollout-\(id).jsonl", [
+                meta,
+                json(["timestamp": "2026-10-16T12:00:00Z", "type": "compacted", "payload": ["message": ""]]),
+                json(["timestamp": "2026-10-17T12:00:00Z", "type": "compacted", "payload": ["message": ""]]),
+                codexTokenCount("2026-10-17T12:30:00Z", last: own, total: codexUsage(300_000 + 1000 * (index + 1), cached: 200_000, output: 1010)),
+                codexTurn("2026-10-17T12:30:01Z", uuid7("2026-10-17T12:30:01Z")),
+            ])
+        }
+        let data = await TranscriptIndex<CodexTranscripts>(root: home.root, cacheURL: nil).refresh()
+        let stats = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        #expect(stats.totalTokens == 1010 + 301_000 + 2010)
+        #expect(stats.days[utc.day(of: Timestamp.parse("2026-10-16T12:00:00Z")!)]?.tokens == 150_500)
+        #expect(stats.models.map(\.name) == ["GPT-5.5"])
+    }
+
+    @Test func everyOtherCodexHomeIsReadOnce() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent("usagegraphs-home-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: home) }
+        for folder in [".codex/sessions/2026/10/18", ".codex-work/sessions/2026/10/18", ".config/codex/archived_sessions", ".codexbar/sessions", ".codex-empty"] {
+            try fm.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try fm.createSymbolicLink(at: home.appendingPathComponent(".codex-link"), withDestinationURL: home.appendingPathComponent(".codex"))
+        let root = home.appendingPathComponent(".codex")
+        let others = CodexTranscripts.otherHomes(of: root, home: home, remembered: [])
+        #expect(others == [".config/codex", ".codex-work"].map { home.appendingPathComponent($0) })
+
+        // A rollout copied into another home is the same rollout.
+        for folder in [".codex/sessions/2026/10/18", ".codex-work/sessions/2026/10/18"] {
+            try Data("{}\n".utf8).write(to: home.appendingPathComponent(folder + "/rollout-a.jsonl"))
+        }
+        try Data("{}\n".utf8).write(to: home.appendingPathComponent(".config/codex/archived_sessions/rollout-b.jsonl"))
+        let found = CodexTranscripts.discover(in: root, others: others)
+        #expect(Set(found.keys) == ["rollout-a.jsonl", "rollout-b.jsonl"])
+        #expect(found["rollout-a.jsonl"]?.path.hasPrefix(root.path) == true)
     }
 
     /// Forty `token_count` events compressed by `zstd -19`, which uses every kind of block the decoder has.

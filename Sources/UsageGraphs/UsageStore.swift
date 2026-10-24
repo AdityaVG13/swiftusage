@@ -66,6 +66,11 @@ final class UsageStore {
             Task { @MainActor in await self?.apply(rebuilding: []) }
         }
 
+        // A fetch of Cursor's usage events lands after the read that started it.
+        NotificationCenter.default.addObserver(forName: CursorSource.serverUsageDidChange, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in await self?.refresh([.cursor]) }
+        }
+
         NotificationCenter.default.addObserver(forName: NSNotification.Name.NSSystemTimeZoneDidChange, object: nil, queue: .main) { [weak self] _ in
             NSTimeZone.resetSystemTimeZone()
             Task { @MainActor in await self?.apply() }
@@ -80,6 +85,12 @@ final class UsageStore {
             }
             _ = saved.wait(timeout: .now() + 2)
         }
+    }
+
+    /// Whether a provider's tokens are known: Cursor's only once its usage events have been fetched.
+    func countsTokens(_ provider: Provider?) -> Bool {
+        guard let provider, !provider.recordsTokensLocally else { return true }
+        return (stats[provider]?[.all]?.totalTokens ?? 0) > 0
     }
 
     var todayTokens: Int64 {
