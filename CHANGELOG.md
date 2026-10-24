@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Anonymous statistics, sent through PostHog: a daily check-in with the app's version and which providers are on and in use, crash reports, and, unless Help Improve SwiftUsage is turned off in Customize → General, each day's count of panel openings and of limit readings that worked or failed, by kind. None of it names a person or an account or says how much anyone used; `docs/privacy.md` lists every field.
 - Cursor's tokens are counted: they come from the usage events Cursor's dashboard lists, asked for with the login Cursor keeps, with the cost Cursor priced each request at. The first fetch reads the whole history; later ones the last two days.
 - Claude Code's and Codex's usage is read from every config folder, as their limits are: `~/.claude_personal`, `~/.config/claude` and other Claude Code folders, and Codex homes such as `~/.codex-work`. When `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, only that folder is read.
 - Claude Code responses through a gateway that gives every response the same ID count once each, rather than all together as one.

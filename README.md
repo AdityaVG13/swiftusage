@@ -15,6 +15,8 @@ SwiftUsage is a macOS menu bar app that shows your coding agents' usage: session
 
 Usage history is read locally from each tool's own files and never leaves your Mac. Two things come from the providers instead, each asked with the login its tool already keeps on this Mac: limits, from each provider's own usage API (see [Limits](#limits)), and Cursor's tokens, which only Cursor's servers keep.
 
+SwiftUsage sends anonymous statistics to its developer: a daily check-in with the app's version and which providers are on and in use, crash reports, and, unless you turn it off in Customize → General, each day's count of panel openings and of limit readings that worked or failed. None of it names you or an account or says how much you used; [docs/privacy.md](docs/privacy.md) lists every field.
+
 ## Install
 
 SwiftUsage needs macOS 26 or later, on Apple silicon or Intel. It runs natively on both and never uses Rosetta.
@@ -27,7 +29,7 @@ The app is signed with a Developer ID and notarized by Apple; the first time it 
 
 SwiftUsage updates itself. Once a day it reads the latest release's `feed.json` from GitHub (the request carries nothing about your usage), downloads a newer version in the background, and then opens a window offering Install and Relaunch, Remind Me Later (asks again a day later) or Skip This Version. ⋯ → Check for Updates… looks right away, and Customize → General turns the daily check off. An update installs only if it's signed with the same Developer ID as the copy you have, notarized by Apple, the version the release names and newer; it replaces the app in one step and reopens it, and settings and the saved history carry over. A copy opened straight from the disk image or Downloads can't replace itself, so its window offers the download instead. You can always update by hand too: quit SwiftUsage (⋯ → Quit SwiftUsage) and drag the new version over the old one.
 
-To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, Cursor's usage events, a downloaded update waiting to be installed, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
+To uninstall, turn off Open at Login in the ⋯ menu, quit SwiftUsage, and move it from Applications to the Trash. Its own files stay behind until you delete them: `~/Library/Caches/dev.tasteskill.UsageGraphs/` holds the transcript summaries (history your coding agents have since deleted included), the last limits it read, pending reset requests, the price list, Cursor's usage events, a downloaded update waiting to be installed, and which account each Antigravity, Pi and Cursor login belongs to (Antigravity's by email address), `~/Library/Application Support/dev.tasteskill.UsageGraphs/` holds statistics waiting to be sent, and `defaults delete dev.tasteskill.UsageGraphs` clears its settings. Neither touches your coding agents' own history or logins.
 
 ## The panel
 
@@ -57,7 +59,7 @@ Pinned limits sit in the menu bar after today's tokens and cost: each account's 
 
 ### Customize
 
-Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left. Its General page sets how often the limits are read (every five minutes unless you change it, from one minute to an hour), whether the app opens at login, and whether it checks for updates.
+Customize (the sliders button, or ⌘,) picks what the app follows. Providers you turn off leave the picker, the totals and the menu bar, and their history and limits aren't read; accounts you turn off leave the Limits tab and the menu bar. Its Menu Bar page previews the item and sets what it shows: today's tokens and cost, which limits are pinned, in what order (drag an account along the preview to move it), and whether they read as used or left. Its General page sets how often the limits are read (every five minutes unless you change it, from one minute to an hour), whether the app opens at login, whether it checks for updates, and whether it sends the daily counts in Help Improve SwiftUsage (see [docs/privacy.md](docs/privacy.md)).
 
 ### Screenshot Mode
 
@@ -120,6 +122,8 @@ Needs Xcode 26 or later (Swift 6.2) and macOS 26 or later.
 swift test                        # parser, incremental reading, stats, pricing and limits tests
 ```
 
+A build from source sends no statistics (see [docs/privacy.md](docs/privacy.md)).
+
 `swiftusage --dump` prints the panel's numbers for every provider in the terminal (`--provider codex` for one, `--cold` skips the saved indexes). `--dump --json` writes one provider's numbers per day as JSON, Claude Code's unless `--provider` names another; it's the report `scripts/verify.sh` checks. The terminal commands read the app's saved indexes but never write them.
 
 ```sh
@@ -138,7 +142,15 @@ swift test                        # parser, incremental reading, stats, pricing 
    ```
 
    Or with an Apple Account and an app-specific password, `--apple-id <email> --team-id <team ID>`. `NOTARY_PROFILE` picks credentials saved under another name, and `SIGN_IDENTITY` another certificate.
-3. Run `./scripts/release.sh`. It builds in a temporary folder and replaces `dist/` only once everything succeeded, so a failed run leaves the last release as it was. Then push the commit it built (`dist/COMMIT`) and publish what it made, tagged on that commit:
+3. Once on each Mac, install [posthog-cli](https://posthog.com/docs/cli) and sign it in to PostHog's EU cloud, which opens the browser to approve it:
+
+   ```sh
+   brew install posthog/tap/posthog-cli
+   posthog-cli --host https://eu.posthog.com login
+   ```
+
+   The script uploads each release's debug symbols with it, so PostHog's crash reports name the functions a crash happened in; if the upload fails, the release still stands and the script prints the command to try again. The statistics go to the SwiftUsage project there, whose key is `bakedToken` in `Sources/UsageGraphs/Telemetry.swift`. Its settings keep exception autocapture on (Error tracking), without which PostHog drops the crash reports, and discard client IP data.
+4. Run `./scripts/release.sh`. It builds in a temporary folder and replaces `dist/` only once everything succeeded, so a failed run leaves the last release as it was. Then push the commit it built (`dist/COMMIT`) and publish what it made, tagged on that commit:
 
    ```sh
    v=$(<VERSION)
@@ -202,4 +214,4 @@ SwiftUsage is under the [MIT License](LICENSE).
 
 ## Notices
 
-The price lists the app ships with come from LiteLLM and OpenUsage, under the MIT License; [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) has their licenses, and the app carries a copy. Provider names and logos belong to their owners, and SwiftUsage isn't affiliated with any of them.
+The price lists the app ships with come from LiteLLM and OpenUsage, under the MIT License, and it includes zstd's decoder and PostHog's SDK; [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) has their licenses, and the app carries a copy. Provider names and logos belong to their owners, and SwiftUsage isn't affiliated with any of them.

@@ -227,6 +227,7 @@ final class LimitsStore {
         asked = shown
         let started = Date()
         let fresh = await LimitsSources.fetch(sources.filter { shown.contains($0.provider) })
+        Telemetry.shared.limitsRead(fresh)
         unanswered = LimitsSources.reachedNothing(since: started) ? unanswered + 1 : 0
         let merged = LimitsSources.update(accounts, with: fresh, asked: shown, missingSince: &missingSince)
         if merged != accounts {

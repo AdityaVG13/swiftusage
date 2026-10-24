@@ -571,6 +571,12 @@ private struct GeneralPage: View {
                           detail: updater.canUpdate ? "Looks for a new version once a day and downloads it, then asks before installing it." : "This is a development build, which doesn't update itself.",
                           isOn: Binding(get: { updater.checksAutomatically }, set: { enabled in withAnimation(Theme.Motion.toggle) { updater.checksAutomatically = enabled } }))
                 .disabled(!updater.canUpdate)
+            Divider()
+            let telemetry = Telemetry.shared
+            SettingSwitch("Help Improve SwiftUsage",
+                          detail: telemetry.isActive ? "Sends how often the panel opened and how limit readings went, once a day. An anonymous check-in and crash reports go out either way." : "This is a development build, which sends nothing.",
+                          isOn: Binding(get: { telemetry.isActive && telemetry.sharesStatistics }, set: { enabled in withAnimation(Theme.Motion.toggle) { telemetry.sharesStatistics = enabled } }))
+                .disabled(!telemetry.isActive)
         }
         .padding(Theme.Layout.modulePadding)
         .frame(maxWidth: .infinity, alignment: .leading)

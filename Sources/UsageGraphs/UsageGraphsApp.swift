@@ -144,7 +144,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let preferences = Preferences()
-        menuBar = MenuBarController(store: UsageStore(preferences: preferences), limits: LimitsStore(preferences: preferences), preferences: preferences)
+        let usage = UsageStore(preferences: preferences)
+        let limits = LimitsStore(preferences: preferences)
+        Telemetry.shared.start(usage: usage, limits: limits, preferences: preferences)
+        menuBar = MenuBarController(store: usage, limits: limits, preferences: preferences)
         Updater.shared.start()
         // The first time, the panel opens by itself, under the item it's found at from then on, once the
         // menu bar has placed the item.

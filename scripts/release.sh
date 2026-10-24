@@ -2,11 +2,13 @@
 # Makes a release of SwiftUsage, at the version in VERSION, in ./dist: the app for Apple silicon and
 # Intel, signed with a Developer ID, notarized and stapled, as a disk image and a zip, with their SHA-256
 # sums, release notes from CHANGELOG.md, the app's debug symbols, and feed.json, which tells copies
-# already installed about the release so they update themselves.
+# already installed about the release so they update themselves. It also uploads the debug symbols to
+# PostHog, where the app's crash reports go, so they name the functions a crash happened in.
 #
 # Notarizing uses the credentials notarytool keeps in the keychain as $NOTARY_PROFILE ("swiftusage" by
-# default); the README's Releasing section shows how to save them. --skip-notarization makes the same
-# files unnotarized, for checking the packaging, but Gatekeeper turns those away on other Macs.
+# default), and the upload the login posthog-cli keeps; the README's Releasing section shows how to save
+# both. --skip-notarization makes the same files unnotarized, for checking the packaging, but Gatekeeper
+# turns those away on other Macs, and uploads no symbols.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -16,6 +18,8 @@ APP="$ROOT/build/SwiftUsage.app"
 DIST="$ROOT/dist"
 NAME="SwiftUsage-$VERSION"
 PROFILE=${NOTARY_PROFILE:-swiftusage}
+# PostHog's EU cloud, where Telemetry.swift sends the statistics and crash reports.
+POSTHOG_HOST=https://eu.posthog.com
 
 notarize=true
 for argument in "$@"; do
@@ -33,6 +37,11 @@ fi
 if $notarize && ! xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1; then
     echo "notarytool has no working credentials saved as \"$PROFILE\" (see the README's Releasing section)." >&2
     echo "Set NOTARY_PROFILE to use others, or pass --skip-notarization." >&2
+    exit 1
+fi
+if $notarize && ! command -v posthog-cli >/dev/null; then
+    echo "The debug symbols are uploaded to PostHog with posthog-cli: brew install posthog/tap/posthog-cli," >&2
+    echo "then posthog-cli --host $POSTHOG_HOST login." >&2
     exit 1
 fi
 if ! grep -qxF "## $VERSION" CHANGELOG.md; then
@@ -119,6 +128,17 @@ plutil -convert json -r -o "$WORK/dist/feed.json" "$FEED"
 
 rm -rf "$DIST"
 mv "$WORK/dist" "$DIST"
+
+# Only for a release that can go out. A failed upload leaves the release as it is and says how to try again.
+if $notarize; then
+    upload=(posthog-cli --host "$POSTHOG_HOST" dsym upload --directory "$(dirname "$APP")" --main-dsym "$(basename "$APP").dSYM"
+        --release-name "$(plutil -extract CFBundleIdentifier raw "$PLIST")" --release-version "$VERSION"
+        --build "$(plutil -extract CFBundleVersion raw "$PLIST")")
+    if ! "${upload[@]}"; then
+        echo "Warning: the debug symbols didn't reach PostHog, so its crash reports from this build won't name functions." >&2
+        echo "Sign in with posthog-cli --host $POSTHOG_HOST login if needed, then run: ${(j: :)${(q)upload[@]}}" >&2
+    fi
+fi
 
 echo "\nSwiftUsage $VERSION, signed by $IDENTITY$($notarize && echo ', notarized and stapled' || echo ', NOT notarized'):"
 ls -lh "$DIST" | sed 1d

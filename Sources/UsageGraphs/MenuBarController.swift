@@ -162,6 +162,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         isOpen = true
         state.clearHover()
         store.panelOpened()
+        Telemetry.shared.panelOpened()
         Task { await limits.refresh() }
 
         // The modules' leading edge lines up with the item, kept 8pt inside the screen.
