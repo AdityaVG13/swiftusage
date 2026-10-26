@@ -120,6 +120,15 @@ struct UpdaterTests {
         #expect(try Self.build(of: installed.url) == 10)
     }
 
+    @Test func downloadsAgainSoonOnlyWhenThatMayHelp() {
+        #expect(UpdatePackage.mayPass(URLError(.notConnectedToInternet)))
+        #expect(UpdatePackage.mayPass(CocoaError(.fileWriteOutOfSpace)))
+        #expect(UpdatePackage.mayPass(UpdatePackage.Failure.unavailable(503)))
+        for failure: UpdatePackage.Failure in [.damaged, .unreadable, .unsigned(nil), .mismatched] {
+            #expect(!UpdatePackage.mayPass(failure))
+        }
+    }
+
     // MARK: - Apps to update
 
     private static func folder() throws -> URL {

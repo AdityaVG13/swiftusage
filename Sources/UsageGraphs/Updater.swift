@@ -46,9 +46,13 @@ struct InstalledApp: Sendable {
     /// What the app in an update must satisfy, in the code requirement language.
     var requirement: String
 
-    /// The running app, if it can update itself: a bundle signed with a Developer ID. An update then has to
-    /// meet its designated requirement (the same bundle ID, signed by the same team) and be notarized. A
-    /// development build is signed ad hoc and never updates, so it can't be replaced by a release.
+    /// The Developer ID team that signs SwiftUsage's releases.
+    static let releaseTeam = "28726K5AS9"
+
+    /// The running app, if it can update itself: a release, signed with SwiftUsage's Developer ID. An update
+    /// then has to meet its designated requirement (the same bundle ID, signed by the same team) and be
+    /// notarized. A development build is signed ad hoc, and a release could never replace a build someone
+    /// signed with their own Developer ID, so neither updates, and neither sends statistics (`TelemetryConfig`).
     static let current: InstalledApp? = {
         let bundle = Bundle.main
         guard bundle.bundleURL.pathExtension == "app",
@@ -61,7 +65,7 @@ struct InstalledApp: Sendable {
         var text: CFString?
         guard SecStaticCodeCreateWithPath(bundle.bundleURL as CFURL, [], &code) == errSecSuccess, let code,
               SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &info) == errSecSuccess,
-              (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] is String,
+              (info as? [String: Any])?[kSecCodeInfoTeamIdentifier as String] as? String == releaseTeam,
               SecCodeCopyDesignatedRequirement(code, [], &designated) == errSecSuccess, let designated,
               SecRequirementCopyString(designated, [], &text) == errSecSuccess, let text
         else { return nil }
@@ -86,6 +90,8 @@ struct InstalledApp: Sendable {
 /// to meet the installed app's requirement and be the build the feed names, newer than the installed one.
 enum UpdatePackage {
     enum Failure: LocalizedError, Equatable {
+        /// GitHub answered the download with this HTTP status instead of the zip.
+        case unavailable(Int)
         case damaged
         case unreadable
         case unsigned(String?)
@@ -93,12 +99,22 @@ enum UpdatePackage {
 
         var errorDescription: String? {
             switch self {
+            case .unavailable(let status): "GitHub didn't send the download (HTTP \(status))."
             case .damaged: "The download doesn't match the release it's for."
             case .unreadable: "The download isn't a zip of the app."
             case .unsigned(let reason): "The app in the download isn't signed and notarized as SwiftUsage is" + (reason.map { " (\($0))." } ?? ".")
             case .mismatched: "The app in the download isn't the version the release names."
             }
         }
+    }
+
+    /// Whether downloading again soon may go differently: after the network, the disk or GitHub failed, it
+    /// may. A download that isn't an installable update stays one until the next release, so it waits for the
+    /// next day's check rather than being downloaded again every hour.
+    static func mayPass(_ error: Error) -> Bool {
+        guard let failure = error as? Failure else { return true }
+        if case .unavailable = failure { return true }
+        return false
     }
 
     /// Whether the zip is the one the feed describes, byte for byte.
@@ -348,7 +364,8 @@ final class Updater {
         do {
             let (download, response) = try await Self.session.download(for: URLRequest(url: feed.url, timeoutInterval: 60))
             defer { try? FileManager.default.removeItem(at: download) }
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw UpdatePackage.Failure.damaged }
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200 else { throw UpdatePackage.Failure.unavailable(status) }
             try await Task.detached { try UpdatePackage.check(download, for: app, feed: feed) }.value
             try Task.checkCancellation()
             // An older release on offer may have started installing meanwhile, from the zip about to be replaced.
@@ -359,8 +376,8 @@ final class Updater {
             try JSONEncoder().encode(feed).write(to: savedFeed, options: .atomic)
             offer(.ready(feed))
         } catch {
-            // Tried again at the next check.
-            lastCheck = nil
+            // Tried again within the hour, or at the next day's check when that won't help.
+            if UpdatePackage.mayPass(error) { lastCheck = nil }
             guard !Task.isCancelled else { return }
             NSLog("swiftusage: update \(feed.version) not downloaded: \(error)")
             report(.failed(title: "Couldn't download SwiftUsage \(feed.version)", message: error.localizedDescription))
