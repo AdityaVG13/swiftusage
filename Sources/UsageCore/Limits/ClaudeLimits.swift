@@ -7,11 +7,29 @@ import Foundation
 ///
 /// Claude Code keeps each folder's login in the keychain as `Claude Code-credentials`, with
 /// `-<first 8 hex digits of SHA-256(folder)>` appended for folders set through `CLAUDE_CONFIG_DIR`, or in
-/// `<folder>/.credentials.json`. The account behind it is in the folder's `.claude.json`.
+/// `<folder>/.credentials.json`. The folder's `.claude.json` names the account last signed in there; whose
+/// the login is, Anthropic says.
 public struct ClaudeLimits: LimitsSource {
     public let provider = Provider.claude
+    /// Whose each folder's login is, as Anthropic last said, so an expired one keeps its account's card.
+    private let identities: Remembered<Identity>
 
-    public init() {}
+    struct Identity: Codable, Sendable, Equatable {
+        /// `account|org`, as a login's `accountID`.
+        var account: String
+        var name: String?
+        /// The hash of the token it was learned from. A login written over it later, perhaps another account's,
+        /// isn't taken to be this one's until it's been read.
+        var token: String
+    }
+
+    public init() {
+        self.init(identitiesURL: Remembered<Identity>.inCaches("claude-accounts.json"))
+    }
+
+    init(identitiesURL: URL) {
+        identities = Remembered(identitiesURL)
+    }
 
     struct Login {
         var folder: URL
@@ -31,13 +49,35 @@ public struct ClaudeLimits: LimitsSource {
     }
 
     public func fetch() async -> [AccountLimits] {
-        let logins = Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR"))
+        var logins: [Login] = []
+        for login in Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR")) {
+            logins.append(await identified(login))
+        }
         let readings = await LimitsSources.readings(of: logins, id: \.id, read: Self.limits(for:))
         let served = Set(readings.filter(\.hasValues).map(\.id))
         func accounts(_ logins: [Login]) -> Set<String> {
             Set(logins.compactMap { $0.accountID.split(separator: "|").first.map(String.init) })
         }
         return readings + (await ClaudeDesktop.limits(served: accounts(logins.filter { served.contains($0.id) }), signedIn: accounts(logins), ids: served))
+    }
+
+    /// The login under the account its token belongs to, as Anthropic says. A tool that switches accounts can
+    /// leave one account's `.claude.json` beside another's login; read as that account, the login would show
+    /// its limits on the other's card and hide that account's own login as a copy.
+    func identified(_ login: Login) async -> Login {
+        guard let token = login.token else { return login }
+        let slot = login.folder.standardizedFileURL.path
+        let hash = token.sha256Prefix
+        var login = login
+        if login.expires.map({ $0 > Date() }) ?? true, let profile = await AnthropicUsage.shared.profile(token: token) {
+            identities.set(Identity(account: profile.key, name: profile.label, token: hash), for: slot)
+            login.accountID = profile.key
+            login.account = profile.label ?? login.account
+        } else if let known = identities[slot], known.token == hash {
+            login.accountID = known.account
+            login.account = known.name ?? login.account
+        }
+        return login
     }
 
     private static func limits(for login: Login) async -> AccountLimits {
@@ -217,7 +257,9 @@ actor AnthropicUsage {
         var email: String?
         var plan: String?
 
-        var id: String { "claude:" + [accountID, organizationID].compactMap { $0?.lowercased() }.joined(separator: "|") }
+        /// `account|org`, as a Claude Code login's `accountID`.
+        var key: String { [accountID, organizationID].compactMap { $0?.lowercased() }.joined(separator: "|") }
+        var id: String { "claude:" + key }
         var label: String? { ClaudeLimits.label(organization: organizationName, email: email) }
     }
 

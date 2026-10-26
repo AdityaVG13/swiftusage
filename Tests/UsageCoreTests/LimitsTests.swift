@@ -16,6 +16,7 @@ struct LimitsTests {
     static func antigravity() -> AntigravityLimits { AntigravityLimits(emailsURL: remembered("antigravity-accounts.json")) }
     static func cursor() -> CursorLimits { CursorLimits(plansURL: remembered("cursor-plans.json")) }
     static func pi() -> PiLimits { PiLimits(identitiesURL: remembered("pi-accounts.json")) }
+    static func claude() -> ClaudeLimits { ClaudeLimits(identitiesURL: remembered("claude-accounts.json")) }
 
     private func object(_ json: String) -> [String: Any] {
         (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any] ?? [:]
@@ -114,6 +115,30 @@ struct LimitsTests {
         #expect(waiting.map(\.waitingOn) == [Keychain.Item(service: "Claude Code-credentials", account: "tester"), nil,
                                             Keychain.Item(service: personal, account: "tester")])
         #expect(!asked.contains(Keychain.Item(service: "Claude Code-credentials", account: nil)))
+    }
+
+    @Test func claudeCodeLoginIsTheAccountItsTokenBelongsTo() async {
+        let source = Self.claude()
+        // `.claude.json` names the personal account, but the folder's login is the team's.
+        var login = ClaudeLimits.Login(folder: URL(fileURLWithPath: "/tmp/home/.claude"), isDefault: true, accountID: "a2|o2", account: "Personal",
+                                       token: "team-" + UUID().uuidString, expires: Date().addingTimeInterval(3600))
+        let profile = Data(#"{"account":{"uuid":"A1","email":"k@t.dev"},"organization":{"uuid":"O1","name":"Tasteskill","organization_type":"claude_team"}}"#.utf8)
+        let found = await HTTP.$transport.withValue({ request in
+            HTTP.Response(status: request.url?.path.hasSuffix("/profile") == true ? 200 : 500, headers: [:], data: profile)
+        }) {
+            await source.identified(login)
+        }
+        #expect(found.id == "claude:a1|o1")
+        #expect(found.account == "Tasteskill")
+
+        // Expired, it isn't asked about, and keeps the account it was found to be.
+        login.expires = Date().addingTimeInterval(-60)
+        let expired = await source.identified(login)
+        #expect(expired.id == "claude:a1|o1")
+        #expect(expired.account == "Tasteskill")
+        // A login written over it since isn't taken to be that account's until it's been read.
+        login.token = "other-" + UUID().uuidString
+        #expect(await source.identified(login).id == "claude:a2|o2")
     }
 
     @Test func codexNamesWindowsByLength() {
