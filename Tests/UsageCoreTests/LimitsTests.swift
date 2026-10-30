@@ -89,6 +89,15 @@ struct LimitsTests {
         #expect(logins.first?.account == "Tasteskill")
         #expect(logins.first?.isDefault == true)
         #expect(logins.last?.account == "Personal")
+        // Where each is kept, for saving it back renewed.
+        #expect(logins.map(\.store) == [.keychain(Keychain.Item(service: "Claude Code-credentials", account: "tester")),
+                                        .file(home.appendingPathComponent(".claude-copy/.credentials.json")),
+                                        .keychain(Keychain.Item(service: personal, account: "tester"))])
+        // An item found under another name than the user's isn't one Claude Code reads, so it isn't written to.
+        let unnamed = ClaudeLimits.logins(home: home, environment: ["USER": "tester"]) { item in
+            item.account == nil ? keychain[item.service].map(Keychain.Reading.password) ?? .missing : .missing
+        }
+        #expect(unnamed.map(\.store) == [nil, .file(home.appendingPathComponent(".claude-copy/.credentials.json")), nil])
 
         // Started from a shell that set `CLAUDE_CONFIG_DIR`, the plain default login still shows.
         let custom = ClaudeLimits.logins(home: home, environment: ["USER": "tester", "CLAUDE_CONFIG_DIR": home.appendingPathComponent(".claude_personal").path]) { item in keychain[item.service].map(Keychain.Reading.password) ?? .missing }
@@ -139,6 +148,199 @@ struct LimitsTests {
         // A login written over it since isn't taken to be that account's until it's been read.
         login.token = "other-" + UUID().uuidString
         #expect(await source.identified(login).id == "claude:a2|o2")
+    }
+
+    /// A Claude Code folder and its login, kept in memory where the keychain would keep it.
+    final class ClaudeFolder: Sendable {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-claude-\(UUID().uuidString)")
+        let store = ClaudeLimits.Store.keychain(Keychain.Item(service: "Claude Code-credentials", account: "tester"))
+        let saved = Mutex<[String: Any]?>(nil)
+        let requests = Mutex<[[String: Any]]>([])
+
+        init(_ json: String) {
+            try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            saved.withLock { $0 = JSONValue.object(Data(json.utf8)) }
+        }
+
+        deinit { try? FileManager.default.removeItem(at: folder) }
+
+        var oauth: [String: Any] { saved.withLock { $0?["claudeAiOauth"] as? [String: Any] ?? [:] } }
+
+        func renewal() -> ClaudeRenewal {
+            ClaudeRenewal(storage: ClaudeRenewal.Storage(
+                read: { [self] _ in saved.withLock { $0.flatMap { try? JSONSerialization.data(withJSONObject: $0) } } },
+                write: { [self] _, data in
+                    saved.withLock { $0 = JSONValue.object(data) }
+                    return true
+                }), lockAttempts: 1)
+        }
+
+        func login(token: String = "old-access") -> ClaudeLimits.Login {
+            ClaudeLimits.Login(folder: folder, isDefault: true, accountID: "a1|o1", token: token, expires: Date().addingTimeInterval(-60),
+                               refreshToken: "old-refresh", store: store)
+        }
+
+        /// Renews with Anthropic answering `status` and `body`, counting its requests.
+        func renew(_ renewal: ClaudeRenewal, status: Int = 200, _ body: String, turnedAway: Bool = false,
+                   meanwhile: (@Sendable () -> Void)? = nil) async -> ClaudeRenewal.Outcome {
+            await HTTP.$transport.withValue({ [self] request in
+                if request.url?.absoluteString == ClaudeRenewal.tokenURL {
+                    requests.withLock { $0.append(JSONValue.object(request.httpBody) ?? [:]) }
+                    meanwhile?()
+                }
+                return HTTP.Response(status: status, headers: [:], data: Data(body.utf8))
+            }) {
+                await renewal.renew(login(), turnedAway: turnedAway)
+            }
+        }
+    }
+
+    static let expiredClaudeLogin = #"""
+        {"claudeAiOauth":{"accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1000,
+         "scopes":["user:inference","user:profile"],"subscriptionType":"team","rateLimitTier":"default_claude_max_5x"},
+         "mcpOAuth":{"plugin:x|1":{"accessToken":"mcp"}}}
+        """#
+
+    @Test func claudeRenewsAnExpiredLoginAndSavesItBack() async {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin)
+        let outcome = await claude.renew(claude.renewal(), #"{"access_token":"new-access","refresh_token":"new-refresh","expires_in":28800,"scope":"user:inference user:profile"}"#)
+        guard case .renewed(let token, let refresh, let expires) = outcome else {
+            Issue.record("Not renewed: \(outcome)")
+            return
+        }
+        #expect(token == "new-access")
+        #expect(refresh == "new-refresh")
+        #expect(abs((expires?.timeIntervalSinceNow ?? 0) - 28800) < 60)
+
+        // Asked as Claude Code asks, with the scopes the login has.
+        let request = claude.requests.withLock { $0.first } ?? [:]
+        #expect(request["grant_type"] as? String == "refresh_token")
+        #expect(request["refresh_token"] as? String == "old-refresh")
+        #expect(request["client_id"] as? String == ClaudeRenewal.clientID)
+        #expect(request["scope"] as? String == "user:inference user:profile")
+
+        // Saved back with everything else kept as it was, and no lock left behind.
+        #expect(claude.oauth["accessToken"] as? String == "new-access")
+        #expect(claude.oauth["refreshToken"] as? String == "new-refresh")
+        #expect(JSONValue.date(claude.oauth["expiresAt"]).map { abs($0.timeIntervalSince(expires!)) < 1 } == true)
+        #expect(claude.oauth["subscriptionType"] as? String == "team")
+        #expect(claude.oauth["rateLimitTier"] as? String == "default_claude_max_5x")
+        #expect(claude.saved.withLock { ($0?["mcpOAuth"] as? [String: Any])?.keys.sorted() } == ["plugin:x|1"])
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: claude.folder.path)) == [])
+        #expect(!FileManager.default.fileExists(atPath: claude.folder.path + ".lock"))
+    }
+
+    @Test func claudeTakesALoginAnotherProcessRenewedWithoutRenewingIt() async {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin.replacingOccurrences(of: #""accessToken":"old-access","refreshToken":"old-refresh","expiresAt":1000"#,
+                                                                                with: #""accessToken":"theirs","refreshToken":"their-refresh","expiresAt":\#(Int(Date().timeIntervalSince1970 * 1000) + 3_600_000)"#))
+        let outcome = await claude.renew(claude.renewal(), #"{"access_token":"new-access"}"#)
+        guard case .renewed("theirs", "their-refresh", _) = outcome else {
+            Issue.record("Not theirs: \(outcome)")
+            return
+        }
+        #expect(claude.requests.withLock { $0.count } == 0)
+    }
+
+    @Test func claudeLeavesARejectedRefreshTokenAlone() async {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin)
+        let renewal = claude.renewal()
+        #expect(await claude.renew(renewal, status: 400, #"{"error":"invalid_grant"}"#) == .rejected)
+        #expect(await claude.renew(renewal, status: 400, #"{"error":"invalid_grant"}"#) == .rejected)
+        #expect(claude.requests.withLock { $0.count } == 1)
+        #expect(claude.oauth["accessToken"] as? String == "old-access")
+        // Anything else is tried again next time.
+        let other = ClaudeFolder(Self.expiredClaudeLogin)
+        #expect(await other.renew(other.renewal(), status: 503, "") == .unchanged)
+        #expect(await other.renew(other.renewal(), status: 503, "") == .unchanged)
+        #expect(other.requests.withLock { $0.count } == 2)
+    }
+
+    @Test func claudeWaitsOnClaudeCodesLockAndTakesOverOneLeftBehind() async throws {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin)
+        let lock = claude.folder.appendingPathComponent(".oauth_refresh.lock")
+        try FileManager.default.createDirectory(at: lock, withIntermediateDirectories: false)
+        #expect(await claude.renew(claude.renewal(), #"{"access_token":"new-access"}"#) == .unchanged)
+        #expect(claude.requests.withLock { $0.count } == 0)
+        #expect(FileManager.default.fileExists(atPath: lock.path))
+
+        // Untouched for longer than Claude Code holds it, its holder is gone.
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-120)], ofItemAtPath: lock.path)
+        guard case .renewed("new-access", "old-refresh", _) = await claude.renew(claude.renewal(), #"{"access_token":"new-access"}"#) else {
+            Issue.record("Not renewed")
+            return
+        }
+        #expect(!FileManager.default.fileExists(atPath: lock.path))
+    }
+
+    @Test func claudeDoesntSaveOverALoginSignedInMeanwhile() async {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin)
+        let outcome = await claude.renew(claude.renewal(), #"{"access_token":"new-access","refresh_token":"new-refresh"}"#) {
+            claude.saved.withLock { $0 = JSONValue.object(Data(#"{"claudeAiOauth":{"accessToken":"signed-in","refreshToken":"signed-in-refresh"}}"#.utf8)) }
+        }
+        guard case .renewed("new-access", _, _) = outcome else {
+            Issue.record("Not renewed: \(outcome)")
+            return
+        }
+        #expect(claude.oauth["accessToken"] as? String == "signed-in")
+        #expect(claude.oauth["refreshToken"] as? String == "signed-in-refresh")
+    }
+
+    @Test func claudeRenewsATokenAnthropicTurnedAwayAndAsksAgain() async {
+        let claude = ClaudeFolder(Self.expiredClaudeLogin.replacingOccurrences(of: #""expiresAt":1000"#,
+                                                                                with: #""expiresAt":\#(Int(Date().timeIntervalSince1970 * 1000) + 3_600_000)"#))
+        let renewal = claude.renewal()
+        // A token that hasn't run out is left alone, unless Anthropic turned it away.
+        #expect(await claude.renew(renewal, #"{"access_token":"new-access"}"#) == .unchanged)
+        let reading = await HTTP.$transport.withValue({ request in
+            if request.url?.absoluteString == ClaudeRenewal.tokenURL {
+                return HTTP.Response(status: 200, headers: [:], data: Data(#"{"access_token":"new-access","expires_in":28800}"#.utf8))
+            }
+            if request.url?.path.hasSuffix("/usage") == true {
+                let fresh = request.value(forHTTPHeaderField: "Authorization") == "Bearer new-access"
+                return HTTP.Response(status: fresh ? 200 : 401, headers: [:], data: Data(#"{"five_hour":{"utilization":10}}"#.utf8))
+            }
+            return HTTP.Response(status: 200, headers: [:], data: Data("{}".utf8))
+        }) {
+            await AnthropicUsage.shared.limits(id: "claude:turned-away", provider: .claude, account: "Tasteskill", token: "old-access",
+                                               renew: "Run `claude`.", plan: "Team") {
+                guard case .renewed(let token, _, _) = await renewal.renew(claude.login(), turnedAway: true) else { return nil }
+                return token
+            }
+        }
+        #expect(reading.problem == nil)
+        #expect(reading.meters.first?.used == 10)
+        #expect(claude.oauth["accessToken"] as? String == "new-access")
+    }
+
+    @Test func claudeLoginIsSavedThroughSecurityAsClaudeCodeSavesIt() {
+        let item = Keychain.Item(service: "Claude Code-credentials-1a2b3c4d", account: "tester")
+        let short = Keychain.saving(item, Data(#"{"a":1}"#.utf8))
+        #expect(short.arguments == ["-i"])
+        #expect(short.input == "add-generic-password -U -a \"tester\" -s \"Claude Code-credentials-1a2b3c4d\" -X \"7b2261223a317d\"\n")
+        // Past what `security -i` reads at once, the arguments carry it.
+        let long = Keychain.saving(item, Data(repeating: 0x41, count: 3000))
+        #expect(long.input == nil)
+        #expect(long.arguments.prefix(7) == ["add-generic-password", "-U", "-a", "tester", "-s", "Claude Code-credentials-1a2b3c4d", "-X"])
+        #expect(long.arguments.last == String(repeating: "41", count: 3000))
+        #expect(Keychain.saving(Keychain.Item(service: "a \"quoted\" name", account: "tester"), Data([1])).input == nil)
+
+        // Saved as ASCII, which `security -w` prints as it is rather than as hex.
+        let saved = ClaudeRenewal.asciiJSON(["name": "Café 🍰", "url": "https://x/y"]).flatMap { String(data: $0, encoding: .utf8) }
+        #expect(saved?.allSatisfy(\.isASCII) == true)
+        #expect(saved?.contains(#"https://x/y"#) == true)
+        #expect(JSONValue.object(saved.map { Data($0.utf8) })?["name"] as? String == "Café 🍰")
+    }
+
+    @Test func claudeLoginFileIsReplacedWhole() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("swiftusage-claude-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent(".credentials.json")
+        try Data("old".utf8).write(to: file)
+        #expect(ClaudeRenewal.replace(file, with: Data("new".utf8)))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "new")
+        #expect((try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int) == 0o600)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == [".credentials.json"])
     }
 
     @Test func codexNamesWindowsByLength() {

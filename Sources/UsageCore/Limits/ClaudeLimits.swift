@@ -8,7 +8,8 @@ import Foundation
 /// Claude Code keeps each folder's login in the keychain as `Claude Code-credentials`, with
 /// `-<first 8 hex digits of SHA-256(folder)>` appended for folders set through `CLAUDE_CONFIG_DIR`, or in
 /// `<folder>/.credentials.json`. The folder's `.claude.json` names the account last signed in there; whose
-/// the login is, Anthropic says.
+/// the login is, Anthropic says. Its access token lasts eight hours; one that has run out is renewed and saved
+/// back as Claude Code would (`ClaudeRenewal`).
 public struct ClaudeLimits: LimitsSource {
     public let provider = Provider.claude
     /// Whose each folder's login is, as Anthropic last said, so an expired one keeps its account's card.
@@ -31,7 +32,7 @@ public struct ClaudeLimits: LimitsSource {
         identities = Remembered(identitiesURL)
     }
 
-    struct Login {
+    struct Login: Sendable {
         var folder: URL
         var isDefault: Bool
         var accountID: String
@@ -40,6 +41,10 @@ public struct ClaudeLimits: LimitsSource {
         var token: String?
         var waitingOn: Keychain.Item?
         var expires: Date?
+        var refreshToken: String?
+        /// Where Claude Code keeps it, for saving it back renewed. Nil for a keychain item Claude Code
+        /// wouldn't find under the user's name.
+        var store: Store?
         var scopes: [String]?
         var subscription: String?
         var tier: String?
@@ -51,7 +56,7 @@ public struct ClaudeLimits: LimitsSource {
     public func fetch() async -> [AccountLimits] {
         var logins: [Login] = []
         for login in Self.logins(remembered: EnvironmentFolders.seen("CLAUDE_CONFIG_DIR")) {
-            logins.append(await identified(login))
+            logins.append(await identified(await Self.renewed(login)))
         }
         let readings = await LimitsSources.readings(of: logins, id: \.id, read: Self.limits(for:))
         let served = Set(readings.filter(\.hasValues).map(\.id))
@@ -94,7 +99,21 @@ public struct ClaudeLimits: LimitsSource {
         if let scopes = login.scopes, !scopes.isEmpty, !scopes.contains("user:profile") {
             return .failed(login.id, .claude, account: login.account, "This login can't read limits. Sign in again with `claude`.")
         }
-        return await AnthropicUsage.shared.limits(id: login.id, provider: .claude, account: login.account, token: token, renew: renew, plan: plan)
+        return await AnthropicUsage.shared.limits(id: login.id, provider: .claude, account: login.account, token: token, renew: renew, plan: plan) {
+            await renewed(login, turnedAway: true).token.flatMap { $0 == token ? nil : $0 }
+        }
+    }
+
+    /// The login with a working token when its own has run out, or Anthropic just `turnedAway` it before
+    /// then, and Claude Code's refresh token still works; else as it was.
+    static func renewed(_ login: Login, turnedAway: Bool = false, renewal: ClaudeRenewal = .shared) async -> Login {
+        guard turnedAway || login.expires.map({ $0 < Date() }) == true else { return login }
+        guard case .renewed(let token, let refresh, let expires) = await renewal.renew(login, turnedAway: turnedAway) else { return login }
+        var login = login
+        login.token = token
+        login.refreshToken = refresh
+        login.expires = expires
+        return login
     }
 
     // MARK: - Reading the response
@@ -199,6 +218,7 @@ public struct ClaudeLimits: LimitsSource {
             }
             // Claude Code saves its login under the user's name; an item without one can hold other logins.
             var credentials: [String: Any]?
+            var store: Store?
             var waitingOn: Keychain.Item?
             search: for service in folder.service {
                 for name in [user, nil] {
@@ -206,7 +226,10 @@ public struct ClaudeLimits: LimitsSource {
                     switch keychain(item) {
                     case .password(let reading):
                         credentials = oauth(reading)
-                        if credentials != nil { break search }
+                        if credentials != nil {
+                            store = name == nil ? nil : .keychain(item)
+                            break search
+                        }
                     case .needsPermission:
                         waitingOn = item
                         break search
@@ -215,7 +238,11 @@ public struct ClaudeLimits: LimitsSource {
                     }
                 }
             }
-            credentials = credentials ?? JSONValue.object(file: folder.url.appendingPathComponent(".credentials.json"))?["claudeAiOauth"] as? [String: Any]
+            if credentials == nil {
+                let file = folder.url.appendingPathComponent(".credentials.json")
+                credentials = JSONValue.object(file: file)?["claudeAiOauth"] as? [String: Any]
+                store = credentials == nil ? nil : .file(file)
+            }
             let token = (credentials?["accessToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }
             guard token != nil || waitingOn != nil else { return nil }
 
@@ -224,6 +251,7 @@ public struct ClaudeLimits: LimitsSource {
                          accountID: [accountID, organization].compactMap { $0?.lowercased() }.joined(separator: "|"),
                          account: label(organization: account["organizationName"] as? String, email: account["emailAddress"] as? String),
                          token: token, waitingOn: token == nil ? waitingOn : nil, expires: JSONValue.date(credentials?["expiresAt"]),
+                         refreshToken: (credentials?["refreshToken"] as? String).flatMap { $0.isEmpty ? nil : $0 }, store: store,
                          scopes: credentials?["scopes"] as? [String],
                          subscription: credentials?["subscriptionType"] as? String, tier: credentials?["rateLimitTier"] as? String)
         }
@@ -241,7 +269,7 @@ public struct ClaudeLimits: LimitsSource {
 actor AnthropicUsage {
     static let shared = AnthropicUsage()
     private static let api = "https://api.anthropic.com/api/oauth"
-    private static let baseHeaders = [
+    static let baseHeaders = [
         "Accept": "application/json",
         "anthropic-beta": "oauth-2025-04-20",
         // The usage API answers some questions only for Claude Code itself.
@@ -293,7 +321,10 @@ actor AnthropicUsage {
         return profile
     }
 
-    func limits(id: String, provider: Provider, account: String?, token: String, renew: String, plan fallback: String?) async -> AccountLimits {
+    /// `renewing` gives a new token for one Anthropic turned away before its time, as when another process
+    /// renewed it; the reading is asked again once with it.
+    func limits(id: String, provider: Provider, account: String?, token: String, renew: String, plan fallback: String?,
+                renewing: (@Sendable () async -> String?)? = nil) async -> AccountLimits {
         let now = Date()
         let known = profiles[token]?.plan ?? fallback
         if let until = coolingUntil[id], until > now {
@@ -306,6 +337,9 @@ actor AnthropicUsage {
         switch response.status {
         case 200..<300: break
         case 401, 403:
+            if response.status == 401, let renewing, let fresh = await renewing() {
+                return await limits(id: id, provider: provider, account: account, token: fresh, renew: renew, plan: fallback)
+            }
             return .failed(id, provider, account: account, plan: known, "Login expired. \(renew)")
         case 429:
             coolingUntil[id] = now.addingTimeInterval(max(response.retryAfter ?? 300, 60))

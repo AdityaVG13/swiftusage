@@ -92,6 +92,26 @@ public enum Keychain {
         }
     }
 
+    /// Writes over a generic item's password with `/usr/bin/security`, as Claude Code saves its own login, so
+    /// the item goes on trusting what it trusted before. Returns whether the command succeeded; read the item
+    /// back to know it took.
+    static func save(_ item: Item, _ password: Data) -> Bool {
+        let call = saving(item, password)
+        if case .succeeded = run(security, call.arguments, input: call.input) { return true }
+        return false
+    }
+
+    /// The `security` call that saves `password`: through stdin, so the login isn't in the process list,
+    /// unless the line is longer than `security -i` reads at once (4032 characters, as Claude Code counts).
+    static func saving(_ item: Item, _ password: Data) -> (arguments: [String], input: String?) {
+        let hex = password.map { String(format: "%02x", $0) }.joined()
+        let account = item.account ?? ""
+        let line = "add-generic-password -U -a \"\(account)\" -s \"\(item.service)\" -X \"\(hex)\"\n"
+        let quotable = !(account + item.service).contains { $0 == "\"" || $0 == "\\" || $0.isNewline }
+        if quotable, line.count <= 4032 { return (["-i"], line) }
+        return (["add-generic-password", "-U", "-a", account, "-s", item.service, "-X", hex], nil)
+    }
+
     /// Whether macOS asked for `item` after its access list let the reader through, and was turned down:
     /// it's left alone until the person asks for it, rather than asking again on every reading.
     static func isRefused(_ item: Item) -> Bool {
@@ -164,8 +184,8 @@ public enum Keychain {
     }
 
     /// Stdout of a command, stopped if it runs past `timeout` seconds so a locked keychain or a prompt
-    /// can't hold every later reading.
-    private static func run(_ path: String, _ arguments: [String], timeout: TimeInterval = 5) -> Run {
+    /// can't hold every later reading. `input` is written to its stdin.
+    private static func run(_ path: String, _ arguments: [String], timeout: TimeInterval = 5, input: String? = nil) -> Run {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = arguments
@@ -173,12 +193,20 @@ public enum Keychain {
         let output = Pipe()
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
+        let stdin = input.map { _ in Pipe() }
+        if let stdin { process.standardInput = stdin }
         let finished = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in finished.signal() }
         do {
             try process.run()
         } catch {
             return .failed
+        }
+        if let stdin, let input {
+            // A command that's already gone fails the write instead of ending the app with SIGPIPE.
+            _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
+            try? stdin.fileHandleForWriting.write(contentsOf: Data(input.utf8))
+            try? stdin.fileHandleForWriting.close()
         }
         // Read as it arrives, so a large answer can't fill the pipe and stall the command.
         let buffer = OutputBuffer()
