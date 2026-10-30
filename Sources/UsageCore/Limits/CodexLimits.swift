@@ -3,7 +3,8 @@ import Foundation
 
 /// Codex's limits from ChatGPT, signed in with the login in each Codex home's `auth.json`: `$CODEX_HOME`
 /// now or before, `~/.codex`, `~/.config/codex`, and side-by-side homes such as `~/.codex-work`. Codex
-/// renews those logins whenever it runs.
+/// renews those logins whenever it runs; one in a home it hasn't run in for so long that it has run out is
+/// renewed and saved back as Codex would (`CodexRenewal`).
 public struct CodexLimits: LimitsSource {
     public let provider = Provider.codex
 
@@ -13,6 +14,8 @@ public struct CodexLimits: LimitsSource {
         var token: String?
         var accountID: String?
         var waitingOn: Keychain.Item?
+        /// The home whose `auth.json` it's kept in, for saving it back renewed. Nil for a keychain login.
+        var home: URL?
 
         var id: String { "codex:" + (accountID ?? waitingOn?.account ?? "default") }
     }
@@ -22,10 +25,12 @@ public struct CodexLimits: LimitsSource {
     }
 
     func fetch(home: URL = .home, configured: [String] = EnvironmentFolders.seen("CODEX_HOME"),
-               keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password) async -> [AccountLimits] {
+               keychain: @Sendable (Keychain.Item) -> Keychain.Reading = Keychain.password,
+               renewal: CodexRenewal = .shared) async -> [AccountLimits] {
         let logins: [Login] = Self.homes(home: home, configured: configured).compactMap { folder in
             if let auth = JSONValue.object(file: folder.appendingPathComponent("auth.json")),
-               let login = Self.login(auth) {
+               var login = Self.login(auth) {
+                login.home = folder
                 return login
             }
             guard Self.usesKeyring(folder) else { return nil }
@@ -46,7 +51,19 @@ public struct CodexLimits: LimitsSource {
                                      problem: "To see these limits, allow access to Codex's login and choose Always Allow.",
                                      action: .allowKeychain)
             }
-            return await Self.limits(token: token, accountID: login.accountID, provider: .codex, renew: "Run `codex` to renew it.")
+            let renew = "Run `codex` to renew it."
+            guard let home = login.home else {
+                return await Self.limits(token: token, accountID: login.accountID, provider: .codex, renew: renew)
+            }
+            // Renewed only when it's read, so a home that's a copy of another account's login is left alone.
+            var current = token
+            if let expiry = JWT.expiry(token), expiry < Date(), case .renewed(let renewed, _) = await renewal.renew(home: home, token: token) {
+                current = renewed
+            }
+            return await Self.limits(token: current, accountID: login.accountID, provider: .codex, renew: renew) { [current] in
+                guard case .renewed(let renewed, _) = await renewal.renew(home: home, token: current, turnedAway: true), renewed != current else { return nil }
+                return renewed
+            }
         }
     }
 
@@ -100,8 +117,10 @@ public struct CodexLimits: LimitsSource {
         }
     }
 
-    /// One ChatGPT login's limits. Pi signs in to ChatGPT too, so it reads its login through here.
-    static func limits(token: String, accountID: String?, provider: Provider, renew: String) async -> AccountLimits {
+    /// One ChatGPT login's limits. Pi signs in to ChatGPT too, so it reads its login through here. `renewing`
+    /// gives a new token for one ChatGPT turned away before its time; the reading is asked again once with it.
+    static func limits(token: String, accountID: String?, provider: Provider, renew: String,
+                       renewing: (@Sendable () async -> String?)? = nil) async -> AccountLimits {
         let claims = JWT.claims(token)
         let id = "codex:" + (accountID ?? "default")
         let email = claims?[path: "https://api.openai.com/profile", "email"] as? String
@@ -113,7 +132,11 @@ public struct CodexLimits: LimitsSource {
         }
         switch response.status {
         case 200..<300: break
-        case 401, 403: return .failed(id, provider, account: email, "Login expired. \(renew)")
+        case 401, 403:
+            if response.status == 401, let renewing, let fresh = await renewing() {
+                return await limits(token: fresh, accountID: accountID, provider: provider, renew: renew)
+            }
+            return .failed(id, provider, account: email, "Login expired. \(renew)")
         default: return .failed(id, provider, account: email, "ChatGPT's usage API answered HTTP \(response.status).")
         }
         guard let body = response.json else { return .failed(id, provider, account: email, "ChatGPT's usage API sent something unexpected.") }

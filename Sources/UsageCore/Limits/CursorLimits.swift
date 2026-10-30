@@ -2,7 +2,8 @@ import Foundation
 import Synchronization
 
 /// Cursor's included usage for the billing period, signed in with the login the Cursor app keeps in its
-/// `state.vscdb`.
+/// `state.vscdb`, or the `agent` CLI keeps. Logins last 60 days; one in its last few days is renewed and saved
+/// back as Cursor would (`CursorRenewal`).
 public struct CursorLimits: LimitsSource {
     public let provider = Provider.cursor
     private static let api = "https://api2.cursor.sh/aiserver.v1.DashboardService/"
@@ -10,13 +11,15 @@ public struct CursorLimits: LimitsSource {
     /// relaunch included: without it a weekly plan's included usage would take the billing month's end for
     /// its reset.
     private let plans: Remembered<Data>
+    private let renewal: CursorRenewal
 
     public init() {
         self.init(plansURL: Remembered<Data>.inCaches("cursor-plans.json"))
     }
 
-    init(plansURL: URL) {
+    init(plansURL: URL, renewal: CursorRenewal = .shared) {
         plans = Remembered(plansURL)
+        self.renewal = renewal
     }
 
     struct Login: Equatable {
@@ -29,6 +32,8 @@ public struct CursorLimits: LimitsSource {
         var refresh: String?
         var email: String?
         var membership: String?
+        /// Where it's kept, for saving it back renewed.
+        var store: CursorRenewal.Store?
 
         var subject: String? {
             [access, refresh].compactMap(CursorLimits.subject).first
@@ -66,17 +71,18 @@ public struct CursorLimits: LimitsSource {
             }
             if values["cursorAuth/accessToken"] != nil || values["cursorAuth/refreshToken"] != nil {
                 logins.append(Login(source: .ide, access: values["cursorAuth/accessToken"], refresh: values["cursorAuth/refreshToken"],
-                                    email: values["cursorAuth/cachedEmail"], membership: values["cursorAuth/stripeMembershipType"]))
+                                    email: values["cursorAuth/cachedEmail"], membership: values["cursorAuth/stripeMembershipType"], store: .app(state)))
             }
         }
 
         var waitingOn: Keychain.Item?
-        if let auth = JSONValue.object(file: home.appendingPathComponent(".cursor/auth.json")) {
+        let file = home.appendingPathComponent(".cursor/auth.json")
+        if let auth = JSONValue.object(file: file) {
             let access = Self.trimmed((auth["accessToken"] ?? auth["access_token"]) as? String)
             let refresh = Self.trimmed((auth["refreshToken"] ?? auth["refresh_token"]) as? String)
             let email = Self.trimmed(auth["email"] as? String)
             if access != nil || refresh != nil {
-                logins.append(Login(source: .cli, access: access, refresh: refresh, email: email))
+                logins.append(Login(source: .cli, access: access, refresh: refresh, email: email, store: .file(file)))
             }
         }
         if !logins.contains(where: { $0.source == .cli }) {
@@ -97,7 +103,7 @@ public struct CursorLimits: LimitsSource {
                 }
             }
             if access != nil || refresh != nil {
-                logins.append(Login(source: .cli, access: access, refresh: refresh))
+                logins.append(Login(source: .cli, access: access, refresh: refresh, store: .keychain))
             }
         }
         return (logins, waitingOn)
@@ -106,14 +112,23 @@ public struct CursorLimits: LimitsSource {
     private func limits(for login: Login) async -> AccountLimits {
         let email = login.email
         let renewHint = login.source == .ide ? "Open Cursor to renew it." : "Run `agent login` to renew it."
-        // The access token is only read, never renewed here: renewing could rotate the refresh token Cursor
-        // keeps and sign Cursor out. Cursor renews it itself.
         let id = "cursor:" + (Self.subject(login.access) ?? login.subject ?? "default")
-        guard let token = login.access, JWT.expiry(token).map({ $0 >= HTTP.now() }) ?? true else {
+        var current = login.access
+        if let store = login.store, let token = login.access ?? login.refresh, CursorRenewal.isDue(token, now: HTTP.now()),
+           case .renewed(let renewed, _) = await renewal.renew(store, token: token) {
+            current = renewed
+        }
+        guard var token = current, JWT.expiry(token).map({ $0 >= HTTP.now() }) ?? true else {
             return .failed(id, provider, account: email, "Login expired. \(renewHint)")
         }
 
-        let (planResponse, usageResponse) = await Self.query(token: token)
+        var (planResponse, usageResponse) = await Self.query(token: token)
+        // Turned away before its time, as when the login was renewed or signed out elsewhere: read it again.
+        if usageResponse?.status == 401, let store = login.store,
+           case .renewed(let renewed, _) = await renewal.renew(store, token: token, turnedAway: true), renewed != token {
+            token = renewed
+            (planResponse, usageResponse) = await Self.query(token: token)
+        }
         let answered = planResponse.flatMap { $0.ok && $0.json?["planInfo"] is [String: Any] ? $0.data : nil }
         if let answered { plans.set(answered, for: id) }
         let planData = answered ?? plans[id]

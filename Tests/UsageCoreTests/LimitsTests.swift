@@ -14,7 +14,9 @@ struct LimitsTests {
     }
 
     static func antigravity() -> AntigravityLimits { AntigravityLimits(emailsURL: remembered("antigravity-accounts.json")) }
-    static func cursor() -> CursorLimits { CursorLimits(plansURL: remembered("cursor-plans.json")) }
+    static func cursor(renewal: CursorRenewal = idleCursorRenewal) -> CursorLimits { CursorLimits(plansURL: remembered("cursor-plans.json"), renewal: renewal) }
+    /// Renews nothing, so no test reaches the logins Cursor keeps on this Mac.
+    static let idleCursorRenewal = CursorRenewal(storage: .init(read: { _ in (nil, nil) }, write: { _, _ in false }, cursorIsRunning: { false }))
     static func pi() -> PiLimits { PiLimits(identitiesURL: remembered("pi-accounts.json")) }
     static func claude() -> ClaudeLimits { ClaudeLimits(identitiesURL: remembered("claude-accounts.json")) }
 
@@ -337,7 +339,7 @@ struct LimitsTests {
         defer { try? FileManager.default.removeItem(at: folder) }
         let file = folder.appendingPathComponent(".credentials.json")
         try Data("old".utf8).write(to: file)
-        #expect(ClaudeRenewal.replace(file, with: Data("new".utf8)))
+        #expect(SavedLogin.replace(file, with: Data("new".utf8)))
         #expect(try String(contentsOf: file, encoding: .utf8) == "new")
         #expect((try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? Int) == 0o600)
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path) == [".credentials.json"])
@@ -428,8 +430,8 @@ struct LimitsTests {
         let fallback = home.appendingPathComponent(".local/share/devin")
         try FileManager.default.createDirectory(at: fallback, withIntermediateDirectories: true)
         try "windsurf_api_key = \"default-key\"\n".write(to: fallback.appendingPathComponent("credentials.toml"), atomically: true, encoding: .utf8)
-        #expect(DevinLimits.credentials(home: home, configured: configured)?.key == "xdg-key")
-        #expect(DevinLimits.credentials(home: home, configured: [])?.key == "default-key")
+        #expect(DevinLimits.credentials(home: home, configured: configured).map(\.key) == ["xdg-key", "default-key"])
+        #expect(DevinLimits.credentials(home: home, configured: []).map(\.key) == ["default-key"])
     }
 
     @Test func grokReadsItsWeeklyPool() {
@@ -1236,7 +1238,7 @@ struct LimitsTests {
                 let usage = #"{"billingCycleStart":"2026-10-01T00:00:00Z","billingCycleEnd":"2026-11-01T00:00:00Z","planUsage":{"totalPercentUsed":40}}"#
                 return HTTP.Response(status: 200, headers: [:], data: Data(usage.utf8))
             }) {
-                await CursorLimits(plansURL: plans).fetch(home: home) { _ in .missing }.first
+                await CursorLimits(plansURL: plans, renewal: Self.idleCursorRenewal).fetch(home: home) { _ in .missing }.first
             }
         }
         let weekly = Date(timeIntervalSince1970: Timestamp.parse("2026-10-22T00:00:00Z")!)
@@ -1330,7 +1332,7 @@ struct LimitsTests {
             #expect(fromKeychain.first?.id == "cursor:auth0|cli-user")
             #expect(fromKeychain.first?.meters.first?.used == 25)
 
-            // A refresh token alone isn't renewed here, which could sign Cursor out: the login reads as expired.
+            // A refresh token alone, with no expiry to tell when it's due, isn't renewed: the login reads as expired.
             let fromRefresh = await Self.cursor().fetch(home: home) { item in
                 item.service == "cursor-refresh-token" ? .password("cli-refresh") : .missing
             }

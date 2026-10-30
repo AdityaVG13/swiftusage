@@ -53,7 +53,7 @@ actor ClaudeRenewal {
             write: { store, data in
                 switch store {
                 case .keychain(let item): Keychain.save(item, data)
-                case .file(let url): ClaudeRenewal.replace(url, with: data)
+                case .file(let url): SavedLogin.replace(url, with: data)
                 }
             })
     }
@@ -187,26 +187,6 @@ actor ClaudeRenewal {
             wait = min(wait * 2, .seconds(1))
         }
         return lock
-    }
-
-    /// Replaces a file with a copy only its owner can read, swapped in whole.
-    static func replace(_ url: URL, with data: Data) -> Bool {
-        let copy = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).swiftusage-\(UUID().uuidString)")
-        let descriptor = open(copy.path, O_WRONLY | O_CREAT | O_EXCL, 0o600)
-        guard descriptor >= 0 else { return false }
-        let file = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
-        do {
-            try file.write(contentsOf: data)
-            try file.close()
-        } catch {
-            unlink(copy.path)
-            return false
-        }
-        guard rename(copy.path, url.path) == 0 else {
-            unlink(copy.path)
-            return false
-        }
-        return true
     }
 }
 

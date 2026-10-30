@@ -112,6 +112,15 @@ public enum Keychain {
         return (["add-generic-password", "-U", "-a", account, "-s", item.service, "-X", hex], nil)
     }
 
+    /// The account an item is saved under, read without its password, so finding out never asks.
+    static func account(of item: Item) -> String? {
+        var query = item.query
+        query[kSecReturnAttributes as String] = true
+        var found: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &found) == errSecSuccess else { return nil }
+        return (found as? [String: Any])?[kSecAttrAccount as String] as? String
+    }
+
     /// Whether macOS asked for `item` after its access list let the reader through, and was turned down:
     /// it's left alone until the person asks for it, rather than asking again on every reading.
     static func isRefused(_ item: Item) -> Bool {
