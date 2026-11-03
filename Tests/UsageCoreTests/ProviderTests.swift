@@ -498,6 +498,11 @@ struct ProviderTests {
                   "payload": ["event": ["kind": "goal_usage_attribution",
                                         "record": ["usage_id": "usage-2", "usage_family": "tool",
                                                    "quantity": ["reported": false, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0]]]]]),
+            // A record that names no family is still a call; only a named tool or reminder is not.
+            json(["recorded_at": 1_789_807_856_000_000, "payload_type": "runtime.session",
+                  "payload": ["event": ["kind": "goal_usage_attribution",
+                                        "record": ["usage_id": "usage-3",
+                                                   "quantity": ["input_tokens": 5, "output_tokens": 1]]]]]),
         ]
         for (i, text) in lines.enumerated() {
             var line = text
@@ -505,12 +510,12 @@ struct ProviderTests {
                 #expect(MuseTranscripts.ingest(UnsafeRawBufferPointer(bytes), lineOffset: UInt64(i * 200), pathHash: 77, into: &record))
             }
         }
-        #expect(record.usage.count == 1)
+        #expect(record.usage.count == 2)
         #expect(record.usage.values.first?.model == "muse-spark-1.3-contributor")
-        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.input } == 40)
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.input } == 45)
         #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.cacheRead } == 60)
-        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.output } == 10)
-        #expect(record.messages.count == 1)
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.output } == 11)
+        #expect(record.messages.count == 2)
         // A subagent's transcript carries usage but no session start of its own.
         var subagent = FileRecord(isSubagent: true)
         var providerLine = lines[1]

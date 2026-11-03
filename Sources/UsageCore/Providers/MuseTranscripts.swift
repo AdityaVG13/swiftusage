@@ -45,8 +45,9 @@ public enum MuseTranscripts: TranscriptFormat {
         guard let quantity = body["quantity"] as? [String: Any], let time = recordedTime(entry) else { return true }
         // Tool and reminder records attribute a call again with no counts of their own, and an unreported
         // quantity is Muse saying it doesn't know: neither is a message or a token.
-        let family = body["usage_family"] as? String
-        guard family == "provider" || family == "compaction" else { return true }
+        // A record that names no family is still a call: dropping an unknown shape would lose tokens
+        // silently, which is worse than counting a record with no counts.
+        if let family = body["usage_family"] as? String, family != "provider", family != "compaction" { return true }
         if let reported = quantity["reported"] as? Bool, !reported { return true }
         if !record.isSubagent { record.sessionStart = min(record.sessionStart ?? time, time) }
 
