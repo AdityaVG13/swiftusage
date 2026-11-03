@@ -479,21 +479,32 @@ struct ProviderTests {
 
     // MARK: Muse
 
-    @Test func museRepeatedTurnCompletion() {
+    @Test func museUsageComesFromAttributionRecords() {
         var record = FileRecord(isSubagent: false)
-        for (i, type) in ["token-usage", "turn_completed", "turn.completed", "TURN-COMPLETE"].enumerated() {
-            var line = json([
-                "id": "event-\(i)", "type": type, "turnId": "turn1",
-                "timestamp": "2026-10-18T10:00:00Z", "modelId": "muse-model",
-                "promptTokens": 100, "usage": ["outputTokens": 10],
-            ])
+        let lines = [
+            json(["recorded_at": 1_789_807_853_881_848, "payload_type": "run.model.configured",
+                  "payload": ["kind": "run_model", "record": ["model_id": "muse-spark-1.3-contributor"]]]),
+            json(["recorded_at": 1_789_807_854_000_000, "payload_type": "runtime.session",
+                  "payload": ["event": ["kind": "goal_usage_attribution",
+                                        "record": ["usage_id": "usage-1",
+                                                   "quantity": ["input_tokens": 100, "output_tokens": 10, "cached_tokens": 60]]]]]),
+            // The same usage is attributed again to its goal; it must not count twice.
+            json(["recorded_at": 1_789_807_854_000_000, "payload_type": "runtime.session",
+                  "payload": ["event": ["kind": "goal_usage_attribution",
+                                        "record": ["usage_id": "usage-1",
+                                                   "quantity": ["input_tokens": 100, "output_tokens": 10, "cached_tokens": 60]]]]]),
+        ]
+        for (i, text) in lines.enumerated() {
+            var line = text
             line.withUTF8 { bytes in
                 #expect(MuseTranscripts.ingest(UnsafeRawBufferPointer(bytes), lineOffset: UInt64(i * 200), pathHash: 77, into: &record))
             }
         }
         #expect(record.usage.count == 1)
-        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.total } == 110)
-        #expect(record.messages.count == 2)
+        #expect(record.usage.values.first?.model == "muse-spark-1.3-contributor")
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.input } == 40)
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.cacheRead } == 60)
+        #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.output } == 10)
     }
 
     // MARK: OpenCode
