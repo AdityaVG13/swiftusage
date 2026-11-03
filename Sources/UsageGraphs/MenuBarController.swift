@@ -25,6 +25,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private let dimmer = DimmingWindow()
     private var monitors: [Any] = []
     private var isOpen = false
+    private var hasPrewarmed = false
     /// Rereads after providers are turned on or off, once a quick run of switches has settled.
     private var providersWork: Task<Void, Never>?
 
@@ -144,8 +145,9 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func open() {
-        guard let button = statusItem.button else { return }
+    /// The panel's frame for the item's current place, laid out before it's shown.
+    @discardableResult
+    private func place(button: NSStatusBarButton) -> NSScreen? {
         // The item's place on screen. The menu bar hides items that don't fit beside the notch, and any
         // the person turns off in System Settings; then the panel opens at the top right of the screen.
         let item: (left: CGFloat, bottom: CGFloat)?
@@ -157,13 +159,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
             item = nil
             screen = main
         } else {
-            return
+            return nil
         }
-        isOpen = true
-        state.clearHover()
-        store.panelOpened()
-        Telemetry.shared.panelOpened()
-        Task { await limits.refresh() }
 
         // The modules' leading edge lines up with the item, kept 8pt inside the screen.
         let margin = Theme.Layout.margin
@@ -174,6 +171,34 @@ final class MenuBarController: NSObject, NSWindowDelegate {
         if state.screenHeight != screen.visibleFrame.height { state.screenHeight = screen.visibleFrame.height }
         panel.setFrame(NSRect(x: x, y: below.minY, width: width, height: below.height), display: false)
         dimmer.setFrame(below, display: false)
+        return screen
+    }
+
+    /// Lays the panel out and draws it once off screen, so the first open doesn't pay for both.
+    func prewarm() {
+        guard !hasPrewarmed, !isOpen, let button = statusItem.button else { return }
+        hasPrewarmed = true
+        guard let screen = place(button: button) else { return }
+        panel.contentView?.layoutSubtreeIfNeeded()
+        // Showing it invisible, one turn of the run loop, draws the whole hierarchy into layers; the first
+        // click then composites a tree that has been drawn before. It never takes key and never shows.
+        let frame = panel.frame
+        panel.setFrameOrigin(NSPoint(x: screen.frame.minX - frame.width * 2, y: frame.minY))
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        panel.contentView?.displayIfNeeded()
+        panel.orderOut(nil)
+        panel.setFrameOrigin(frame.origin)
+    }
+
+    private func open() {
+        guard let button = statusItem.button, place(button: button) != nil else { return }
+        isOpen = true
+        state.clearHover()
+        store.panelOpened()
+        Telemetry.shared.panelOpened()
+        Task { await limits.refresh() }
+
         // Laid out at its new size before the modules animate in, or the animation would also carry them
         // from where they sat in the old size: half off the left edge, the first time the panel opens.
         panel.contentView?.layoutSubtreeIfNeeded()
