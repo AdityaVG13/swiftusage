@@ -26,10 +26,17 @@ struct LimitsView: View {
                 // `$12.4K/$25K`. Every card takes the same, so the bars line up from card to card.
                 let usedWidth: CGFloat = accounts.contains { $0.meters.contains { $0.unit != .percent } } ? 88 : 40
                 // Room for the cards below the pickers and the spend tiles, and above the footer.
-                CappedScrollView(maxHeight: state.listCap(leaving: 300, atLeast: 260), fadesEdges: false) {
-                    VStack(spacing: Theme.Layout.spacing) {
-                        ForEach(accounts) { AccountCard(account: $0, usedWidth: usedWidth) }
+                // One tick for every card's countdown; cards build as they scroll into view.
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    LazyCappedScrollView(maxHeight: state.listCap(leaving: 300, atLeast: 260)) {
+                        LazyVStack(spacing: Theme.Layout.spacing) {
+                            ForEach(accounts) { AccountCard(account: $0, usedWidth: usedWidth) }
+                        }
+                        .padding(10)
                     }
+                    .environment(\.limitClock, context.date)
+                    .module()
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Layout.moduleRadius, style: .continuous))
                 }
             }
         }
@@ -59,10 +66,21 @@ struct LimitsView: View {
         // Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
         case .muse: return "Muse Code doesn't report plan limits."
         case .pi: return "Pi isn't signed in to a Claude, ChatGPT or Grok subscription."
-        // Their usage arrives through Hermes, which doesn't report their plan limits.
-        case .nous, .zai, .kimi: return "\(provider.name)'s plan limits aren't read yet."
         default: return "\(provider.name) isn't signed in on this Mac."
         }
+    }
+}
+
+/// One clock for every countdown in the list, ticked by the single TimelineView around it, so a card's
+/// rows don't each schedule their own wake-up.
+private struct LimitClock: EnvironmentKey {
+    static let defaultValue = Date()
+}
+
+extension EnvironmentValues {
+    fileprivate var limitClock: Date {
+        get { self[LimitClock.self] }
+        set { self[LimitClock.self] = newValue }
     }
 }
 
@@ -71,11 +89,12 @@ private struct AccountCard: View {
     let account: AccountLimits
     let usedWidth: CGFloat
     @Environment(LimitsStore.self) private var limits
+    @Environment(\.limitClock) private var now
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 7) {
-                ProviderIcon(provider: account.provider, size: 15)
+                ProviderIcon(provider: account.provider, size: account.provider == .nous ? 20 : 15)
                 Text(title)
                     .font(.system(size: 13, weight: .semibold))
                     .lineLimit(1)
@@ -85,12 +104,10 @@ private struct AccountCard: View {
                 }
                 Spacer(minLength: 0)
                 if account.problem != nil, account.hasValues {
-                    TimelineView(.periodic(from: .now, by: 30)) { _ in
-                        Text("Updated " + account.updated.formatted(.relative(presentation: .named)))
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+                    Text("Updated " + account.updated.formatted(.relative(presentation: .named)))
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
             }
             if let problem = account.problem {
@@ -134,7 +151,8 @@ private struct AccountCard: View {
         .padding(.horizontal, Theme.Layout.modulePadding)
         .padding(.vertical, 13)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .module(cornerRadius: Theme.Layout.tileRadius)
+        .background(RoundedRectangle(cornerRadius: Theme.Layout.tileRadius, style: .continuous).fill(.primary.opacity(0.045)))
+        .overlay(RoundedRectangle(cornerRadius: Theme.Layout.tileRadius, style: .continuous).strokeBorder(.primary.opacity(0.08), lineWidth: 1))
         .contextMenu {
             Button("Hide \(title)") { limits.hidden.insert(account.id) }
             Button("Refresh Limits") { Task { await limits.refresh(force: true) } }
@@ -169,49 +187,48 @@ private struct MeterRow: View {
     let usedWidth: CGFloat
     @Environment(LimitsStore.self) private var limits
     @Environment(PanelState.self) private var state
+    @Environment(\.limitClock) private var now
     @State private var hovering = false
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let pace = Pace(meter, now: context.date)
-            HStack(spacing: 10) {
-                HStack(spacing: 4) {
-                    Text(meter.label)
-                        .lineLimit(1)
-                    if limits.isPinned(account, meter) {
-                        Image(systemName: "menubar.rectangle")
-                            .font(.system(size: 9.5, weight: .semibold))
-                            .foregroundStyle(.secondary)
-                            .help("Shown in the menu bar")
-                    }
+        let pace = Pace(meter, now: now)
+        HStack(spacing: 10) {
+            HStack(spacing: 4) {
+                Text(meter.label)
+                    .lineLimit(1)
+                if limits.isPinned(account, meter) {
+                    Image(systemName: "menubar.rectangle")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .help("Shown in the menu bar")
                 }
-                .font(.system(size: 12.5, weight: .semibold))
-                .frame(width: 112, alignment: .leading)
-                MeterBar(fraction: meter.fraction, even: pace.verdict == .fine ? nil : pace.even, color: Theme.paceColor(pace.verdict))
-                    .frame(height: 6)
-                Text(LimitText.used(meter))
-                    .font(.system(size: 12.5, weight: .semibold, design: .rounded))
-                    // One line in a row 20 points high: a longer amount shrinks a little rather than wrapping.
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .contentTransition(.numericText(countsDown: true))
-                    .animation(Theme.Motion.roll, value: LimitText.used(meter))
-                    .frame(width: usedWidth, alignment: .trailing)
-                Text(LimitText.reset(meter, now: context.date))
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(width: 112, alignment: .trailing)
             }
-            .monospacedDigit()
-            .frame(height: 20)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(meter.label)
-            .accessibilityValue(LimitText.facts(meter, pace: pace, now: context.date).joined(separator: ", ")
-                                + (limits.isPinned(account, meter) ? ", shown in the menu bar" : ""))
-            .onChange(of: hovering) { _, inside in
-                state.chartHover = inside ? LimitText.details(meter, pace: pace, now: context.date) : nil
-            }
+            .font(.system(size: 12.5, weight: .semibold))
+            .frame(width: 112, alignment: .leading)
+            MeterBar(fraction: meter.fraction, even: pace.verdict == .fine ? nil : pace.even, color: Theme.paceColor(pace.verdict))
+                .frame(height: 6)
+            Text(LimitText.used(meter))
+                .font(.system(size: 12.5, weight: .semibold, design: .rounded))
+                // One line in a row 20 points high: a longer amount shrinks a little rather than wrapping.
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .contentTransition(.numericText(countsDown: true))
+                .animation(Theme.Motion.roll, value: LimitText.used(meter))
+                .frame(width: usedWidth, alignment: .trailing)
+            Text(LimitText.reset(meter, now: now))
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .frame(width: 112, alignment: .trailing)
+        }
+        .monospacedDigit()
+        .frame(height: 20)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(meter.label)
+        .accessibilityValue(LimitText.facts(meter, pace: pace, now: now).joined(separator: ", ")
+                            + (limits.isPinned(account, meter) ? ", shown in the menu bar" : ""))
+        .onChange(of: hovering) { _, inside in
+            state.chartHover = inside ? LimitText.details(meter, pace: pace, now: now) : nil
         }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -229,6 +246,7 @@ private struct MeterRow: View {
 private struct ResetsRow: View {
     let account: AccountLimits
     @Environment(LimitsStore.self) private var limits
+    @Environment(\.limitClock) private var now
     @State private var confirming = false
 
     var body: some View {
@@ -262,10 +280,8 @@ private struct ResetsRow: View {
                         .controlSize(.small)
                         .buttonStyle(.borderedProminent)
                     } else {
-                        TimelineView(.periodic(from: .now, by: 60)) { context in
-                            Text("\(Text("Limit resets").foregroundStyle(.secondary))  \(Text("\(resets.available) available").fontWeight(.semibold))\(Text(expiry(resets, now: context.date)).foregroundStyle(.secondary))")
-                                .lineLimit(1)
-                        }
+                        Text("\(Text("Limit resets").foregroundStyle(.secondary))  \(Text("\(resets.available) available").fontWeight(.semibold))\(Text(expiry(resets, now: now)).foregroundStyle(.secondary))")
+                            .lineLimit(1)
                         Spacer(minLength: 0)
                         // Even when the last reading failed: a refused use spends nothing.
                         if resets.usable {

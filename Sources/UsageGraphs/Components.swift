@@ -430,6 +430,29 @@ struct CappedScrollView<Content: View>: View {
     }
 }
 
+/// A capped scroll view for rows that build as they come into view. Its height follows the content up to
+/// `maxHeight`: it takes the cap while the rows overflow, and shrinks to fit when only a few are there.
+/// Lazy rows keep the work of scrolling to the cards on screen rather than every card in the list.
+struct LazyCappedScrollView<Content: View>: View {
+    let maxHeight: CGFloat
+    @ViewBuilder let content: Content
+    @State private var contentHeight: CGFloat?
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content
+        }
+        .scrollIndicators(.never)
+        .scrollBounceBehavior(.basedOnSize)
+        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+            geometry.contentSize.height
+        } action: { _, height in
+            contentHeight = height
+        }
+        .frame(height: contentHeight.map { min($0, maxHeight) } ?? maxHeight)
+    }
+}
+
 /// Fades a scroll view's content out at the edges it continues past, which shows there's more without
 /// a scroller. With a mouse connected, macOS draws legacy scrollers that sit on top of the glass and run
 /// past its rounded corners, so the panel's lists hide them and fade instead.
