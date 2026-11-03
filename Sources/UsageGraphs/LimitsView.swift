@@ -59,6 +59,8 @@ struct LimitsView: View {
         // Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
         case .muse: return "Muse Code doesn't report plan limits."
         case .pi: return "Pi isn't signed in to a Claude, ChatGPT or Grok subscription."
+        // Their usage arrives through Hermes, which doesn't report their plan limits.
+        case .nous, .zai, .kimi: return "\(provider.name)'s plan limits aren't read yet."
         default: return "\(provider.name) isn't signed in on this Mac."
         }
     }
