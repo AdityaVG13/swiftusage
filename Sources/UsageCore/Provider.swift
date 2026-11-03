@@ -1,6 +1,7 @@
 import Foundation
 
-/// The coding agents whose local history the app reads, in T3 Code's order, then Devin.
+/// The coding agents whose usage the app shows, in T3 Code's order, then Devin and the plans that come
+/// through Hermes.
 public enum Provider: String, CaseIterable, Codable, Sendable, Identifiable {
     case codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, nous, zai, kimi
 
