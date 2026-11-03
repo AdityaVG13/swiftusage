@@ -199,21 +199,29 @@ enum Dump {
         let done = DispatchSemaphore(value: 0)
         Task.detached {
             let sources = UsageSources.all(cached: !cold, readOnly: true, waitingForServers: true)
+            /// One plan's history can come from several stores (its own tool and the harnesses billing
+            /// to it), merged exactly as the panel merges them.
+            func data(for provider: Provider) async -> UsageData {
+                var parts: [UsageData] = []
+                for source in sources where source.provider == provider {
+                    parts.append(await source.refresh(progress: nil))
+                }
+                return parts.count == 1 ? parts[0] : UsageData.merged(parts)
+            }
             if json {
                 let target = only ?? .claude
-                let source = sources.first { $0.provider == target }!
-                let data = await source.refresh(progress: nil)
-                FileHandle.standardOutput.write(jsonReport(data))
+                FileHandle.standardOutput.write(jsonReport(await data(for: target)))
                 print()
                 done.signal()
                 return
             }
             let prices = await PriceUpdates.shared.current()
-            for source in sources where only == nil || source.provider == only {
+            for provider in Provider.allCases where only == nil || provider == only {
+                guard sources.contains(where: { $0.provider == provider }) else { continue }
                 let started = Date()
-                let data = await source.refresh(progress: nil)
+                let data = await data(for: provider)
                 let elapsed = Date().timeIntervalSince(started)
-                print("== \(source.provider.name)  transcripts: \(data.transcriptCount)  scan: \(String(format: "%.2f", elapsed))s  responses: \(data.usage.count)")
+                print("== \(provider.name)  transcripts: \(data.transcriptCount)  scan: \(String(format: "%.2f", elapsed))s  responses: \(data.usage.count)")
                 for range in StatsRange.allCases {
                     let s = StatsBuilder.build(data, range: range, prices: prices)
                     print("  [\(range.rawValue)] sessions \(Format.grouped(s.sessions))  messages \(Format.grouped(s.messages))  tokens \(Format.compact(s.totalTokens)) (\(s.totalTokens))  cost \(Format.dollars(s.cost))  active days \(s.activeDays)  peak hour \(s.peakHour.map(Format.hour) ?? "–")  favorite \(s.favoriteModel?.name ?? "–")")

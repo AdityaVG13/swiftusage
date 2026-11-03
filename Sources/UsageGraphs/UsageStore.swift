@@ -111,9 +111,10 @@ final class UsageStore {
         await apply()
     }
 
-    /// Where a provider keeps its history, if that folder exists.
+    /// Where a provider keeps its history, if a folder of its sources exists.
     func folder(for provider: Provider) -> URL? {
-        sources.first { $0.provider == provider }?.watchedPaths
+        sources.filter { $0.provider == provider }
+            .flatMap(\.watchedPaths)
             .first { FileManager.default.fileExists(atPath: $0) }
             .map { URL(fileURLWithPath: $0) }
     }
@@ -180,18 +181,23 @@ final class UsageStore {
         // nothing the stats show; only a read that changed some provider's history rebuilds them.
         var changed: Set<Provider> = []
         let previous = data
-        await withTaskGroup(of: (Provider, UsageData, Bool).self) { group in
+        await withTaskGroup(of: (Provider, UsageData).self) { group in
             for source in chosen {
                 let handler = progressHandler(for: source.provider)
-                let before = previous[source.provider]
                 group.addTask {
-                    let result = await read(source, handler)
-                    return (source.provider, result, before.map { !$0.sameHistory(as: result) } ?? true)
+                    (source.provider, await read(source, handler))
                 }
             }
-            for await (provider, result, providerChanged) in group {
-                data[provider] = result
-                if providerChanged { changed.insert(provider) }
+            // A plan's card can be fed by several stores at once (its own tool plus the harnesses that
+            // bill to it), so every source's share is merged into that provider's history.
+            var received: [Provider: [UsageData]] = [:]
+            for await (provider, result) in group {
+                received[provider, default: []].append(result)
+            }
+            for (provider, parts) in received {
+                let merged = parts.count == 1 ? parts[0] : UsageData.merged(parts)
+                data[provider] = merged
+                if !(previous[provider]?.sameHistory(as: merged) ?? false) { changed.insert(provider) }
             }
         }
         activeScans -= 1

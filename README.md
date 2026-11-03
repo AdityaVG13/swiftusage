@@ -78,6 +78,15 @@ Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, 
 | Muse Code | `~/.local/share/muse/sessions/**/session.jsonl` |
 | Pi | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`: `sessions/*/*.jsonl` |
 | Devin | `~/.local/share/devin`: `cli/sessions.db` and `cli-next/sessions.db` |
+| Kimi | `$KIMI_CODE_SESSION_DIR` or `~/.kimi-code/sessions`: `**/wire.jsonl`, whose `usage.record` events carry each call's tokens |
+
+Two harnesses record which plan each call was billed to, so their usage is counted on that plan's
+card rather than one of its own: **Empryo** (`~/.empryo/usage/usage-YYYY-MM.jsonl`, where a
+`modelId` such as `subscriptions/claude-opus-5-5` names the plan and `cost` is Empryo's own price)
+and **Hermes** (`~/.hermes/state.db`, `session_model_usage`, whose `billing_provider` names the
+plan). A call either names no plan this app has a card for (`deepseek/…`, `openrouter/…`) or names
+none at all (`billing_provider` blank) is left out rather than guessed at. Pi keeps its own card and
+is not split by plan.
 
 The variables are read from the app's own environment. Opened from Finder or at login, it doesn't see ones set in a shell profile such as `~/.zshrc`, so it reads the default folder. For Claude Code and Codex that means every folder beside it too, and every folder `CLAUDE_CONFIG_DIR` or `CODEX_HOME` has named when the app was opened from a shell; a folder that's another's through a symlink is read once. `launchctl setenv CLAUDE_CONFIG_DIR ~/somewhere` passes one to apps opened after it, until you log out, and then only that folder is read.
 

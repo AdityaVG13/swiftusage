@@ -8,7 +8,9 @@ public enum UsageSources {
         func index<Format: TranscriptFormat>(_ format: Format.Type, root: URL) -> TranscriptIndex<Format> {
             TranscriptIndex<Format>(root: root, cacheURL: cached ? TranscriptIndex<Format>.defaultCacheURL : nil, readOnly: readOnly)
         }
-        return [
+        let empryo = EmpryoReader()
+        let hermes = HermesReader()
+        var sources: [any UsageSource] = [
             index(CodexTranscripts.self, root: CodexTranscripts.defaultRoot),
             index(ClaudeTranscripts.self, root: ClaudeTranscripts.defaultRoot),
             CursorSource(server: .live(cached: cached, readOnly: readOnly, waits: waitingForServers),
@@ -19,6 +21,16 @@ public enum UsageSources {
             index(MuseTranscripts.self, root: MuseTranscripts.defaultRoot),
             index(PiTranscripts.self, root: PiTranscripts.defaultRoot),
             DevinSource(),
+            KimiSource(),
         ]
+        // Empryo and Hermes name the plan each call was billed to, so their usage feeds the plan's
+        // card rather than a card of its own. Every plan's source shares one reader.
+        sources += [Provider.claude, .codex, .grok, .kimi, .cursor, .devin].map {
+            EmpryoSource(provider: $0, reader: empryo)
+        }
+        sources += [Provider.codex, .muse, .grok, .zai, .nous, .claude, .cursor, .antigravity, .opencode].map {
+            HermesSource(provider: $0, reader: hermes)
+        }
+        return sources
     }
 }
