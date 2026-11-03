@@ -10,12 +10,12 @@ public enum Provider: String, CaseIterable, Codable, Sendable, Identifiable {
     public var name: String {
         switch self {
         case .codex: "Codex"
-        case .claude: "Claude Code"
+        case .claude: "Claude"
         case .cursor: "Cursor"
         case .grok: "Grok"
         case .opencode: "OpenCode"
         case .antigravity: "Antigravity"
-        case .muse: "Muse Code"
+        case .muse: "Muse"
         case .pi: "Pi"
         case .devin: "Devin"
         case .nous: "Nous Portal"
