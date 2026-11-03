@@ -177,8 +177,8 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     /// Lays the panel out and draws it once off screen, so the first open doesn't pay for both.
     func prewarm() {
         guard !hasPrewarmed, !isOpen, let button = statusItem.button else { return }
-        hasPrewarmed = true
         guard let screen = place(button: button) else { return }
+        hasPrewarmed = true
         panel.contentView?.layoutSubtreeIfNeeded()
         // Showing it invisible, one turn of the run loop, draws the whole hierarchy into layers; the first
         // click then composites a tree that has been drawn before. It never takes key and never shows.
