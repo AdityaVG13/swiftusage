@@ -2,7 +2,7 @@ import Foundation
 
 /// The coding agents whose local history the app reads, in T3 Code's order, then Devin.
 public enum Provider: String, CaseIterable, Codable, Sendable, Identifiable {
-    case codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, nous, zai
+    case codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, nous, zai, kimi
 
     public var id: String { rawValue }
 
@@ -19,6 +19,7 @@ public enum Provider: String, CaseIterable, Codable, Sendable, Identifiable {
         case .devin: "Devin"
         case .nous: "Nous Portal"
         case .zai: "Z.AI"
+        case .kimi: "Kimi"
         }
     }
 
