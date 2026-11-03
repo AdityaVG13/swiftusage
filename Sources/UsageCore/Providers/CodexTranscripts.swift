@@ -79,7 +79,9 @@ public enum CodexTranscripts: TranscriptFormat {
         // A line's type comes first (`{"timestamp":…,"type":…,"payload":{"type":…`), within its first 120 bytes
         // in every rollout on hand, so only its start is searched, not the rest, often hundreds of kilobytes.
         let head = UnsafeRawBufferPointer(rebasing: line.prefix(1024))
-        guard JSONLine.contains(head, "\"token_count\"") || JSONLine.contains(head, "\"token_usage_record\"")
+        // Every line taken carries a payload, so one scan rules out the rest before the ten that name them.
+        guard JSONLine.contains(head, "\"payload\""),
+              JSONLine.contains(head, "\"token_count\"") || JSONLine.contains(head, "\"token_usage_record\"")
             || JSONLine.contains(head, "\"turn_context\"") || JSONLine.contains(head, "\"session_meta\"")
             || JSONLine.contains(head, "\"task_started\"") || JSONLine.contains(head, "\"item_completed\"")
             || JSONLine.contains(head, "\"user_message\"") || JSONLine.contains(head, "\"agent_message\"")
