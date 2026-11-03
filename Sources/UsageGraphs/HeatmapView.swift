@@ -22,6 +22,8 @@ struct HeatmapView: View {
     var body: some View {
         let start = firstDay
         let thresholds = quartiles(start: start)
+        // VoiceOver names every day in view, so it's asked once and handed to both readers.
+        let days = daysInView(start: start)
         // The cells only redraw when the numbers change; the ring under the pointer is its own layer.
         Canvas { context, _ in
             for (column, name) in monthLabels(start: start) {
@@ -52,8 +54,8 @@ struct HeatmapView: View {
         .frame(width: Theme.Layout.heatmapWidth, height: Theme.Layout.heatmapHeight)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Activity")
-        .accessibilityValue(summary(start: start))
-        .accessibilityChartDescriptor(HeatmapChart(days: daysInView(start: start)))
+        .accessibilityValue(summary(days))
+        .accessibilityChartDescriptor(HeatmapChart(days: days))
         .onContinuousHover { phase in
             switch phase {
             case .active(let point):
@@ -74,8 +76,8 @@ struct HeatmapView: View {
         }
     }
 
-    private func summary(start: Int) -> String {
-        let days = daysInView(start: start).filter { $0.messages > 0 }
+    private func summary(_ days: [(date: String, messages: Int)]) -> String {
+        let days = days.filter { $0.messages > 0 }
         guard let busiest = days.max(by: { $0.messages < $1.messages }) else { return "No messages in view" }
         return "\(days.count) \(days.count == 1 ? "day" : "days") with messages, the most on \(busiest.date): \(Format.grouped(busiest.messages))"
     }
