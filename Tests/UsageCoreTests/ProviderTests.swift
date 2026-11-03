@@ -486,13 +486,18 @@ struct ProviderTests {
                   "payload": ["kind": "run_model", "record": ["model_id": "muse-spark-1.3-contributor"]]]),
             json(["recorded_at": 1_789_807_854_000_000, "payload_type": "runtime.session",
                   "payload": ["event": ["kind": "goal_usage_attribution",
-                                        "record": ["usage_id": "usage-1",
+                                        "record": ["usage_id": "usage-1", "usage_family": "provider",
                                                    "quantity": ["input_tokens": 100, "output_tokens": 10, "cached_tokens": 60]]]]]),
             // The same usage is attributed again to its goal; it must not count twice.
             json(["recorded_at": 1_789_807_854_000_000, "payload_type": "runtime.session",
                   "payload": ["event": ["kind": "goal_usage_attribution",
-                                        "record": ["usage_id": "usage-1",
+                                        "record": ["usage_id": "usage-1", "usage_family": "provider",
                                                    "quantity": ["input_tokens": 100, "output_tokens": 10, "cached_tokens": 60]]]]]),
+            // A tool record points at a call with no counts of its own, and is no message or token.
+            json(["recorded_at": 1_789_807_855_000_000, "payload_type": "runtime.session",
+                  "payload": ["event": ["kind": "goal_usage_attribution",
+                                        "record": ["usage_id": "usage-2", "usage_family": "tool",
+                                                   "quantity": ["reported": false, "input_tokens": 0, "output_tokens": 0, "cached_tokens": 0]]]]]),
         ]
         for (i, text) in lines.enumerated() {
             var line = text
@@ -505,6 +510,15 @@ struct ProviderTests {
         #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.input } == 40)
         #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.cacheRead } == 60)
         #expect(record.usage.values.reduce(Int64(0)) { $0 + $1.tokens.output } == 10)
+        #expect(record.messages.count == 1)
+        // A subagent's transcript carries usage but no session start of its own.
+        var subagent = FileRecord(isSubagent: true)
+        var providerLine = lines[1]
+        providerLine.withUTF8 { bytes in
+            _ = MuseTranscripts.ingest(UnsafeRawBufferPointer(bytes), lineOffset: 0, pathHash: 78, into: &subagent)
+        }
+        #expect(subagent.usage.count == 1)
+        #expect(subagent.sessionStart == nil)
     }
 
     // MARK: OpenCode

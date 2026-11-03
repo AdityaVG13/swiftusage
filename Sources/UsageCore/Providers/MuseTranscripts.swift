@@ -7,7 +7,7 @@ import Foundation
 public enum MuseTranscripts: TranscriptFormat {
     public static let provider = Provider.muse
     public static let cacheName = "muse-index.json"
-    public static let cacheVersion = 2
+    public static let cacheVersion = 3
 
     public static var defaultRoot: URL {
         let data = URL.environment("XDG_DATA_HOME") ?? .home.appendingPathComponent(".local/share")
@@ -43,7 +43,12 @@ public enum MuseTranscripts: TranscriptFormat {
         }
 
         guard let quantity = body["quantity"] as? [String: Any], let time = recordedTime(entry) else { return true }
-        record.sessionStart = min(record.sessionStart ?? time, time)
+        // Tool and reminder records attribute a call again with no counts of their own, and an unreported
+        // quantity is Muse saying it doesn't know: neither is a message or a token.
+        let family = body["usage_family"] as? String
+        guard family == "provider" || family == "compaction" else { return true }
+        if let reported = quantity["reported"] as? Bool, !reported { return true }
+        if !record.isSubagent { record.sessionStart = min(record.sessionStart ?? time, time) }
 
         let bucket = FileRecord.bucket(time)
         let lineKey = pathHash ^ (lineOffset &* 0x9E37_79B9_7F4A_7C15)
