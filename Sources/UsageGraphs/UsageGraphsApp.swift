@@ -158,6 +158,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.menuBar?.show()
             }
         }
+        // Laid out and drawn once in the background, so the first open is as quick as the next.
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            self?.menuBar?.prewarm()
+        }
     }
 
     /// Opening the app while it runs, from Finder, Spotlight or Launchpad, opens the panel.
