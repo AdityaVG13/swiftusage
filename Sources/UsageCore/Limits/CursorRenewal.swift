@@ -166,7 +166,10 @@ actor CursorRenewal {
         let count = Int(proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size)))
         var path = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         for pid in pids.prefix(max(0, count)) where pid > 0 {
-            if proc_pidpath(pid, &path, UInt32(path.count)) > 0, String(cString: path).contains("/Cursor.app/Contents/") { return true }
+            let length = Int(proc_pidpath(pid, &path, UInt32(path.count)))
+            if length > 0, String(decoding: path.prefix(length).map { UInt8(bitPattern: $0) }, as: UTF8.self).contains("/Cursor.app/Contents/") {
+                return true
+            }
         }
         return false
     }

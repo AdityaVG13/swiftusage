@@ -36,4 +36,4 @@ PostHog's SDK adds the Mac's model (such as MacBook Pro), the system language an
 
 A build from source sends nothing, unless `SWIFTUSAGE_POSTHOG_TOKEN` is set to the key of a project in PostHog's EU cloud, for trying the statistics out against a project of your own.
 
-The app's other requests (each provider's limits, Cursor's usage events, the price list and the update check) are described in the [README](../README.md); none of them carries anything about your usage.
+The app's other requests (each provider's limits, renewing a login that has run out, Cursor's usage events, the price list and the update check) are described in the [README](../README.md); none of them carries anything about your usage.
