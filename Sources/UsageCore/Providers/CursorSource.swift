@@ -16,6 +16,12 @@ public actor CursorSource: UsageSource {
     public nonisolated let ideStateURL: URL
     /// Where Cursor's usage events come from, or nil to count only what's on this Mac.
     private nonisolated let server: CursorServerUsage?
+    /// Where the chats read here are saved, so the next launch reads only the databases that changed.
+    /// Nil to keep them in memory only; with `readOnly`, the index is read but never written.
+    private nonisolated let cacheURL: URL?
+    private nonisolated let readOnly: Bool
+    private var loadedCache = false
+    private var dirtyCache = false
     private var serverAccounts: [String: CursorServerUsage.Account]?
     private var serverFetch: Task<Void, Never>?
     private var serverFetchedAt: Date?
@@ -31,16 +37,31 @@ public actor CursorSource: UsageSource {
     public init(chatsURL: URL = URL.home.appendingPathComponent(".cursor/chats"),
                 acpSessionsURL: URL? = nil,
                 ideStateURL: URL = URL.home.appendingPathComponent("Library/Application Support/Cursor/User/globalStorage/state.vscdb"),
-                server: CursorServerUsage? = nil) {
+                server: CursorServerUsage? = nil,
+                cacheURL: URL? = nil,
+                readOnly: Bool = false) {
         self.chatsURL = chatsURL
         self.acpSessionsURL = acpSessionsURL ?? chatsURL.deletingLastPathComponent().appendingPathComponent("acp-sessions")
         self.ideStateURL = ideStateURL
         self.server = server
+        self.cacheURL = cacheURL
+        self.readOnly = readOnly
+    }
+
+    public static var defaultCacheURL: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("dev.tasteskill.UsageGraphs/cursor-local.json")
+    }
+
+    /// Beside `defaultCacheURL`, named as `IndexFile`'s indexes are.
+    static func binaryURL(_ cacheURL: URL) -> URL {
+        cacheURL.deletingPathExtension().appendingPathExtension("bin")
     }
 
     public nonisolated var watchedPaths: [String] { [chatsURL.path, acpSessionsURL.path, ideStateURL.deletingLastPathComponent().path] }
 
     public func refresh(progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> UsageData {
+        loadIndexOnce()
         var seen: Set<String> = []
         for root in [chatsURL, acpSessionsURL] {
             for relative in TranscriptFolders.files(in: root, depth: 2, include: { $0 == "store.db" }).keys.sorted() {
@@ -53,6 +74,7 @@ public actor CursorSource: UsageSource {
                 else { continue }
                 chat.stamp = stamp
                 chats[path] = chat
+                dirtyCache = true
             }
         }
         if let stamp = DatabaseStamp(path: ideStateURL.path), ide.stamp != stamp,
@@ -62,6 +84,7 @@ public actor CursorSource: UsageSource {
             chat.stamp = stamp
             ide = chat
             ideReadAt = Date()
+            dirtyCache = true
         }
         if let server {
             if serverAccounts == nil { serverAccounts = server.load() }
@@ -96,10 +119,40 @@ public actor CursorSource: UsageSource {
         ideReadAt = nil
         serverAccounts = nil
         serverFetchedAt = nil
+        // A rebuild reads every database again, so what was saved no longer describes them.
+        loadedCache = true
+        dirtyCache = true
         return await refresh(progress: progress)
     }
 
-    public func save() {}
+    /// The chats saved by the last launch, taken for the databases whose stamps haven't changed.
+    private func loadIndexOnce() {
+        guard !loadedCache else { return }
+        loadedCache = true
+        guard let cacheURL, let data = try? Data(contentsOf: Self.binaryURL(cacheURL)),
+              let saved = CursorIndex.decode(data) else { return }
+        for (path, chat) in saved where path != ideStateURL.path {
+            // A chat Cursor has deleted since is no longer part of its history, as a fresh read finds.
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            chats[path] = chat
+        }
+        if let chat = saved[ideStateURL.path] { ide = chat }
+        // Whether the IDE is read again is the stamp's business; it wasn't read just now.
+        ideReadAt = Date()
+    }
+
+    public func save() {
+        guard dirtyCache, !readOnly, let cacheURL else { return }
+        var contents = chats
+        contents[ideStateURL.path] = ide
+        do {
+            try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(CursorIndex.encode(contents)).write(to: Self.binaryURL(cacheURL), options: .atomic)
+            dirtyCache = false
+        } catch {
+            NSLog("swiftusage: could not save Cursor's index: \(error)")
+        }
+    }
 
     private func aggregate() -> UsageData {
         var data = UsageData()

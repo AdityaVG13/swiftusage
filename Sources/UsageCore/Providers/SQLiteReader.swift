@@ -98,6 +98,13 @@ struct DatabaseStamp: Equatable {
     var walSize: UInt64
     var walModified: Double
 
+    init(size: UInt64, modified: Double, walSize: UInt64, walModified: Double) {
+        self.size = size
+        self.modified = modified
+        self.walSize = walSize
+        self.walModified = walModified
+    }
+
     init?(path: String) {
         guard let db = TranscriptInfo.of(path) else { return nil }
         let wal = TranscriptInfo.of(path + "-wal")
