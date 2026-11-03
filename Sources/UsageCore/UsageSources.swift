@@ -11,7 +11,8 @@ public enum UsageSources {
         return [
             index(CodexTranscripts.self, root: CodexTranscripts.defaultRoot),
             index(ClaudeTranscripts.self, root: ClaudeTranscripts.defaultRoot),
-            CursorSource(server: .live(cached: cached, readOnly: readOnly, waits: waitingForServers)),
+            CursorSource(server: .live(cached: cached, readOnly: readOnly, waits: waitingForServers),
+                         cacheURL: cached ? CursorSource.defaultCacheURL : nil, readOnly: readOnly),
             index(GrokTranscripts.self, root: GrokTranscripts.defaultRoot),
             OpenCodeSource(),
             AntigravitySource(),
