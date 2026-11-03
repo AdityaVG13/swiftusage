@@ -1,6 +1,5 @@
 import Testing
 @testable import UsageGraphs
-import UsageCore
 
 struct CLITests {
     /// What macOS, Finder, a login item, Xcode or `defaults` open the app with, and the options and typos
@@ -28,7 +27,7 @@ struct CLITests {
         (["--version"], .version),
         (["--dump", "--json", "--provider", "codex"], .dump(provider: .codex, cold: false, json: true)),
         (["--limits", "--json"], .limits(provider: nil, json: true)),
-        (["--dump", "--provider", "nope"], .usageError("unknown provider 'nope' (valid ids: \(Provider.allCases.map(\.rawValue).joined(separator: ", ")))")),
+        (["--dump", "--provider", "nope"], .usageError("unknown provider 'nope' (valid ids: codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, nous, zai, kimi)")),
     ] as [([String], CLI)])
     func arguments(_ arguments: [String], _ expected: CLI) {
         #expect(CLI.parse(arguments) == expected)
