@@ -205,7 +205,8 @@ public protocol LimitsSource: Sendable {
 public enum LimitsSources {
     /// In the provider picker's order. Pi comes after the tools whose logins it may share, so their cards win.
     public static func all() -> [any LimitsSource] {
-        [CodexLimits(), ClaudeLimits(), CursorLimits(), GrokLimits(), OpenCodeLimits(), AntigravityLimits(), PiLimits(), DevinLimits()]
+        [CodexLimits(), ClaudeLimits(), CursorLimits(), GrokLimits(), OpenCodeLimits(), AntigravityLimits(), PiLimits(), DevinLimits(),
+         NousLimits(), ZaiLimits(), KimiLimits()]
     }
 
     /// Every source's accounts, read side by side, in the provider picker's order. An account several
