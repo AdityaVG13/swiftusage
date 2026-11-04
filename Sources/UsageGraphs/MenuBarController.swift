@@ -176,12 +176,15 @@ final class MenuBarController: NSObject, NSWindowDelegate {
 
     /// Lays the panel out and draws it once off screen, so the first open doesn't pay for both.
     func prewarm() {
-        guard !hasPrewarmed, !isOpen, let button = statusItem.button else { return }
+        // A panel opened in the first seconds has been laid out and drawn already, and one still fading
+        // out would be cut short.
+        guard !hasPrewarmed, !isOpen, !panel.isVisible, let button = statusItem.button else { return }
         hasPrewarmed = true
         guard let screen = place(button: button) else { return }
         panel.contentView?.layoutSubtreeIfNeeded()
-        // Showing it invisible, one turn of the run loop, draws the whole hierarchy into layers; the first
-        // click then composites a tree that has been drawn before. It never takes key and never shows.
+        // Ordered in invisible, drawn and ordered out again within the same turn of the run loop, it has the
+        // whole hierarchy in layers; the first click then composites a tree that has been drawn before. It
+        // never takes key and never shows.
         let frame = panel.frame
         panel.setFrameOrigin(NSPoint(x: screen.frame.minX - frame.width * 2, y: frame.minY))
         panel.alphaValue = 0
@@ -194,6 +197,7 @@ final class MenuBarController: NSObject, NSWindowDelegate {
     private func open() {
         guard let button = statusItem.button, place(button: button) != nil else { return }
         isOpen = true
+        hasPrewarmed = true
         state.clearHover()
         store.panelOpened()
         Telemetry.shared.panelOpened()
