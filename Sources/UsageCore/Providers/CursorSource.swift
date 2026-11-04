@@ -22,6 +22,7 @@ public actor CursorSource: UsageSource {
     private nonisolated let readOnly: Bool
     private var loadedCache = false
     private var dirtyCache = false
+    private var lastSave = Date.distantPast
     private var serverAccounts: [String: CursorServerUsage.Account]?
     private var serverFetch: Task<Void, Never>?
     private var serverFetchedAt: Date?
@@ -86,6 +87,9 @@ public actor CursorSource: UsageSource {
             ideReadAt = Date()
             dirtyCache = true
         }
+        // Saved once read, then at most every five minutes and at quit, so a launch that ends without
+        // quitting doesn't leave the next one to read it all again.
+        if dirtyCache, Date().timeIntervalSince(lastSave) > 300 { save() }
         if let server {
             if serverAccounts == nil { serverAccounts = server.load() }
             if serverFetch == nil, serverFetchedAt.map({ Date().timeIntervalSince($0) >= CursorServerUsage.interval }) ?? true {
@@ -137,8 +141,6 @@ public actor CursorSource: UsageSource {
             chats[path] = chat
         }
         if let chat = saved[ideStateURL.path] { ide = chat }
-        // Whether the IDE is read again is the stamp's business; it wasn't read just now.
-        ideReadAt = Date()
     }
 
     public func save() {
@@ -149,6 +151,7 @@ public actor CursorSource: UsageSource {
             try FileManager.default.createDirectory(at: cacheURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(CursorIndex.encode(contents)).write(to: Self.binaryURL(cacheURL), options: .atomic)
             dirtyCache = false
+            lastSave = Date()
         } catch {
             NSLog("swiftusage: could not save Cursor's index: \(error)")
         }
