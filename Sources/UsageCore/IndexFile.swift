@@ -7,7 +7,7 @@ import Foundation
 enum IndexFile {
     static let magic: [UInt8] = Array("SUIX".utf8)
     /// Bumped when the layout below changes.
-    static let format: UInt32 = 1
+    static let format: UInt32 = 2
 
     struct Header: Equatable {
         var format: UInt32
@@ -68,10 +68,18 @@ enum IndexFile {
                 if usage.cacheWriteHour != 0 { flags |= 1 }
                 if usage.speed != .standard { flags |= 2 }
                 if usage.cost != nil { flags |= 4 }
+                if usage.plan != nil { flags |= 8 }
+                if usage.responseID != nil { flags |= 16 }
+                if usage.firstBucket != nil { flags |= 32 }
+                if usage.aggregateCalls != 0 { flags |= 64 }
                 body.u8(flags)
                 if usage.cacheWriteHour != 0 { body.i64(usage.cacheWriteHour) }
                 if usage.speed != .standard { body.u8(usage.speed.rawValue) }
                 if let cost = usage.cost { body.f64(cost) }
+                if let plan = usage.plan { body.u32(strings.index(plan.rawValue)) }
+                if let responseID = usage.responseID { body.u64(responseID) }
+                if let firstBucket = usage.firstBucket { body.i32(firstBucket) }
+                if usage.aggregateCalls != 0 { body.i64(Int64(usage.aggregateCalls)) }
             }
         }
 
@@ -95,7 +103,7 @@ enum IndexFile {
     static func decode(_ data: Data) -> (header: Header, records: [String: FileRecord])? {
         data.withUnsafeBytes { buffer in
             var reader = Reader(buffer)
-            guard let header = try? reader.header(), header.format == format else { return nil }
+            guard let header = try? reader.header(), header.format >= 1, header.format <= format else { return nil }
             return try? (header, reader.records())
         }
     }
@@ -206,6 +214,13 @@ enum IndexFile {
                         let cost = try f64()
                         usage.cost = cost.isFinite ? cost : nil
                     }
+                    if flags & 8 != 0 {
+                        guard let plan = Provider(rawValue: try stringRef()) else { throw Damaged() }
+                        usage.plan = plan
+                    }
+                    if flags & 16 != 0 { usage.responseID = try u64() }
+                    if flags & 32 != 0 { usage.firstBucket = try i32() }
+                    if flags & 64 != 0 { usage.aggregateCalls = Int(clamping: try count()) }
                     record.usage[id] = usage
                 }
                 records[key] = record

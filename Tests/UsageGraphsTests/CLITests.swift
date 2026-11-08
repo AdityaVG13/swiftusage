@@ -26,8 +26,9 @@ struct CLITests {
         (["--help"], .help),
         (["--version"], .version),
         (["--dump", "--json", "--provider", "codex"], .dump(provider: .codex, cold: false, json: true)),
+        (["--dump", "--json", "--provider", "unattributed"], .dump(provider: .unattributed, cold: false, json: true)),
         (["--limits", "--json"], .limits(provider: nil, json: true)),
-        (["--dump", "--provider", "nope"], .usageError("unknown provider 'nope' (valid ids: codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, nous, zai, kimi)")),
+        (["--dump", "--provider", "nope"], .usageError("unknown provider 'nope' (valid ids: codex, claude, cursor, grok, opencode, antigravity, muse, pi, devin, droid, nous, zai, kimi, unattributed)")),
     ] as [([String], CLI)])
     func arguments(_ arguments: [String], _ expected: CLI) {
         #expect(CLI.parse(arguments) == expected)

@@ -52,6 +52,12 @@ public struct RangeStats: Sendable, Equatable {
     public var sessions = 0
     public var messages = 0
     public var totalTokens: Int64 = 0
+    /// Known in this range, but not attributable to a single day.
+    public var unallocatedTokens: Int64 = 0
+    /// An aggregate overlaps the range boundary, so its contribution is unknown and excluded.
+    public var excludedUncertainTokens: Int64 = 0
+    public var unallocatedMessages = 0
+    public var excludedUncertainMessages = 0
     /// Dollars at API rates for the tokens whose model has a known price.
     public var cost: Double = 0
     /// Models with tokens in the range but no known price, whose tokens `cost` leaves out.
@@ -66,6 +72,11 @@ public struct RangeStats: Sendable, Equatable {
 
     public var favoriteModel: ModelStats? { models.first }
 
+    /// Provider totals exclude the separate unattributed bucket, which may overlap known usage.
+    public static func mergedProviders(_ parts: [Provider: RangeStats], range: StatsRange, today: Int) -> RangeStats {
+        merged(parts.filter { $0.key != .unattributed }.map(\.value), range: range, today: today)
+    }
+
     /// Several providers' stats as one: the same numbers as building them from the providers' usage
     /// merged, without reading that usage again.
     public static func merged(_ parts: [RangeStats], range: StatsRange, today: Int) -> RangeStats {
@@ -77,6 +88,10 @@ public struct RangeStats: Sendable, Equatable {
             stats.sessions += part.sessions
             stats.messages += part.messages
             stats.totalTokens += part.totalTokens
+            stats.unallocatedTokens += part.unallocatedTokens
+            stats.excludedUncertainTokens += part.excludedUncertainTokens
+            stats.unallocatedMessages += part.unallocatedMessages
+            stats.excludedUncertainMessages += part.excludedUncertainMessages
             stats.cost += part.cost
             for hour in 0..<24 { stats.sessionHours[hour] += part.sessionHours[hour] }
             for (day, value) in part.days { stats.days[day, default: DayStats()] += value }
@@ -231,17 +246,33 @@ public enum StatsBuilder {
         var unpriced: Set<String> = []
         for record in data.usage where record.model != "<synthetic>" {
             let d = day(ofBucket: record.bucket)
-            guard d >= firstAllowed, d <= today else { continue }
+            let first = record.firstBucket.map(day(ofBucket:)) ?? d
             let total = record.tokens.total
-            guard total > 0 else { continue }
+            guard total > 0, d >= firstAllowed, first <= today else { continue }
+            guard first >= firstAllowed, d <= today else {
+                stats.excludedUncertainTokens += total
+                stats.excludedUncertainMessages += record.aggregateCalls
+                continue
+            }
+            let dated = first == d
+            stats.messages += record.aggregateCalls
+            if dated {
+                stats.days[d, default: DayStats()].messages += record.aggregateCalls
+            } else {
+                stats.unallocatedMessages += record.aggregateCalls
+            }
             let model = key(for: record.model)
             byModel[model, default: TokenCounts()] += record.tokens
             stats.totalTokens += total
-            stats.days[d, default: DayStats()].tokens += total
-            stats.dayModelTokens[d, default: [:]][model, default: 0] += total
+            if dated {
+                stats.days[d, default: DayStats()].tokens += total
+                stats.dayModelTokens[d, default: [:]][model, default: 0] += total
+            } else {
+                stats.unallocatedTokens += total
+            }
             if let cost = cost(record) {
                 stats.cost += cost
-                stats.days[d, default: DayStats()].cost += cost
+                if dated { stats.days[d, default: DayStats()].cost += cost }
                 costByModel[model, default: 0] += cost
             } else {
                 unpriced.insert(model)

@@ -55,6 +55,11 @@ struct PlanLedgerTests {
              "cacheRead": 0, "cacheWrite": 0, "cost": 0.01],
             ["ts": 1_788_561_264_108, "modelId": "openrouter/anthropic/claude-haiku-4.5", "input": 500,
              "output": 50, "cacheRead": 0, "cacheWrite": 0, "cost": 0.02],
+            ["ts": 1_788_561_270_000, "modelId": "opencode-go/gpt-5.6-luna", "input": 600,
+             "output": 60, "cacheRead": 0, "cacheWrite": 0, "cost": 0.03],
+            ["ts": 1_788_561_280_000, "modelId": "subscriptions/meta-model", "input": 700,
+             "output": 70, "cacheRead": 0, "cacheWrite": 0, "cost": 0.04],
+            ["ts": 1_788_561_290_000, "input": 80, "output": 0, "cacheRead": 0, "cacheWrite": 0],
         ]
         let text = records.map { json($0) }.joined(separator: "\n") + "\n"
         try text.write(to: root.appendingPathComponent("usage-2026-11.jsonl"), atomically: true, encoding: .utf8)
@@ -69,6 +74,18 @@ struct PlanLedgerTests {
         #expect(first.usage.first?.cost == 0.5)
         #expect(await codex.refresh().usage.first?.model == "subscriptions/gpt-6-astra")
         #expect(await kimi.refresh().usage.first?.model == "subscriptions/kimi-code/k3")
+        #expect(await EmpryoSource(provider: .opencode, reader: reader, root: root).refresh().usage.first?.tokens.total == 660)
+        #expect(await EmpryoSource(provider: .muse, reader: reader, root: root).refresh().usage.first?.tokens.total == 770)
+        let unattributed = try #require(Provider(rawValue: "unattributed"))
+        let unknown = await EmpryoSource(provider: unattributed, reader: reader, root: root).refresh()
+        #expect(unknown.usage.count == 3)
+        #expect(unknown.usage.reduce(Int64(0)) { $0 + $1.tokens.total } == 1070)
+        #expect(unknown.usage.contains { $0.model == "unknown" })
+        let registered = UsageSources.all(cached: false)
+        #expect(registered.contains { $0 is EmpryoSource && $0.provider == unattributed })
+        #expect(registered.contains { $0 is HermesSource && $0.provider == unattributed })
+        #expect(registered.contains { $0 is EmpryoSource && $0.provider == .opencode })
+        #expect(registered.contains { $0 is EmpryoSource && $0.provider == .muse })
 
         // A call appended to the same file is read on the next pass, and only for its plan.
         let extra = json(["ts": 1_788_561_300_000, "modelId": "subscriptions/claude-fable-5-1",
@@ -98,7 +115,7 @@ struct PlanLedgerTests {
             "CREATE TABLE sessions (id TEXT PRIMARY KEY, started_at REAL, parent_session_id TEXT)",
             """
             CREATE TABLE session_model_usage (
-                session_id TEXT NOT NULL, model TEXT NOT NULL, billing_provider TEXT NOT NULL DEFAULT '',
+                session_id TEXT NOT NULL, model TEXT NOT NULL, billing_provider TEXT DEFAULT '',
                 billing_base_url TEXT NOT NULL DEFAULT '', billing_mode TEXT NOT NULL DEFAULT '',
                 task TEXT NOT NULL DEFAULT '', api_call_count INTEGER NOT NULL DEFAULT 0,
                 input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +127,12 @@ struct PlanLedgerTests {
             "INSERT INTO sessions VALUES ('main', 1787530903, NULL)",
             "INSERT INTO sessions VALUES ('child', 1787530904, 'main')",
             "INSERT INTO sessions VALUES ('zai', 1787531000, NULL)",
+            "INSERT INTO sessions VALUES ('kimi', 1790848800, NULL)",
+            """
+            INSERT INTO session_model_usage (session_id, model, billing_provider, api_call_count,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, first_seen, last_seen)
+            VALUES ('kimi', 'k3', 'kimi-coding', 4, 100, 0, 0, 0, 1790848800, 1792317600)
+            """,
             """
             INSERT INTO session_model_usage (session_id, model, billing_provider, api_call_count,
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, last_seen)
@@ -130,6 +153,16 @@ struct PlanLedgerTests {
                 input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, last_seen)
             VALUES ('zai', 'glm-5.3', '', 9, 999, 99, 0, 0, 1787532200)
             """,
+            """
+            INSERT INTO session_model_usage (session_id, model, billing_provider, api_call_count,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, last_seen)
+            VALUES ('zai', 'unknown-route-model', 'gateway-x', 1, 7, 0, 0, 0, 1787532200)
+            """,
+            """
+            INSERT INTO session_model_usage (session_id, model, billing_provider, api_call_count,
+                input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, last_seen)
+            VALUES ('zai', 'null-route-model', NULL, 1, 11, 0, 0, 0, 1787532200)
+            """,
         ])
 
         let reader = HermesReader()
@@ -138,15 +171,48 @@ struct PlanLedgerTests {
         #expect(codex.usage.reduce(Int64(0)) { $0 + $1.tokens.input } == 120)
         #expect(codex.usage.reduce(Int64(0)) { $0 + $1.tokens.cacheRead } == 50)
         // The subagent's calls are tokens but not a message or a session of their own.
-        #expect(codex.messageBuckets.values.reduce(0, +) == 3)
+        #expect(codex.usage.reduce(0) { $0 + $1.aggregateCalls } == 3)
         #expect(codex.sessionStarts.count == 1)
         #expect(codex.transcriptCount == 1)
 
         let zai = await HermesSource(provider: .zai, reader: reader, database: database).refresh()
         #expect(zai.usage.count == 1)
         #expect(zai.usage.first?.model == "glm-5.3")
-        // A blank billing provider names no plan, so its row is not counted anywhere.
+        // A blank billing provider must not be attributed to Z.AI.
         #expect(zai.usage.reduce(Int64(0)) { $0 + $1.tokens.input } == 30)
+        let unattributed = try #require(Provider(rawValue: "unattributed"))
+        let unknown = await HermesSource(provider: unattributed, reader: reader, database: database).refresh()
+        #expect(unknown.usage.count == 3)
+        #expect(unknown.usage.reduce(Int64(0)) { $0 + $1.tokens.total } == 1116)
+        #expect(unknown.sessionStarts.count == 1)
+
+        let kimi = await HermesSource(provider: .kimi, reader: reader, database: database).refresh()
+        let utc = DayClock(timeZone: TimeZone(identifier: "UTC")!)
+        let now = Date(timeIntervalSince1970: 1792317600)
+        let all = StatsBuilder.build(kimi, range: .all, now: now, clock: utc)
+        let week = StatsBuilder.build(kimi, range: .days7, now: now, clock: utc)
+        #expect(kimi.usage.count == 1)
+        #expect(all.totalTokens == 100 && all.unallocatedTokens == 100)
+        #expect(all.messages == 4 && all.unallocatedMessages == 4)
+        #expect(week.totalTokens == 0 && week.excludedUncertainTokens == 100)
+        #expect(week.messages == 0 && week.excludedUncertainMessages == 4)
+    }
+
+    @Test func allProvidersExcludeUnattributedButKeepItsOwnStats() throws {
+        let unattributed = try #require(Provider(rawValue: "unattributed"))
+        let now = Date(timeIntervalSince1970: 1_792_317_600)
+        let bucket = FileRecord.bucket(now.timeIntervalSince1970)
+        var known = UsageData(), unknown = UsageData()
+        known.usage = [UsageRecord(bucket: bucket, model: "known", tokens: TokenCounts(input: 100))]
+        unknown.usage = [UsageRecord(bucket: bucket, model: "unknown", tokens: TokenCounts(input: 300))]
+        let clock = DayClock(timeZone: TimeZone(identifier: "UTC")!)
+        let knownStats = StatsBuilder.build(known, range: .all, now: now, clock: clock)
+        let unknownStats = StatsBuilder.build(unknown, range: .all, now: now, clock: clock)
+        let combined = RangeStats.mergedProviders([.codex: knownStats, unattributed: unknownStats], range: .all, today: knownStats.today)
+        #expect(unknownStats.totalTokens == 300)
+        #expect(combined.totalTokens == 100)
+        #expect(combined.models.map(\.id) == knownStats.models.map(\.id))
+        #expect(combined.days == knownStats.days)
     }
 
     private func makeDatabase(at path: String, statements: [String]) throws {

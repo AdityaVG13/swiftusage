@@ -69,8 +69,6 @@ public actor EmpryoReader {
                 guard line.count > 2,
                       let parsed = try? JSONSerialization.jsonObject(with: Data(line)),
                       let record = parsed as? [String: Any],
-                      let model = record["modelId"] as? String,
-                      let plan = Self.plan(for: model),
                       let milliseconds = (record["ts"] as? NSNumber)?.doubleValue,
                       let time = Timestamp.seconds(milliseconds / 1000),
                       let input = TokenCount.parse(record["input"]),
@@ -79,6 +77,8 @@ public actor EmpryoReader {
                       let cacheWrite = TokenCount.parse(record["cacheWrite"]),
                       input + output + cacheRead + cacheWrite > 0
                 else { continue }
+                let model = record["modelId"] as? String ?? "unknown"
+                let plan = Self.plan(for: model) ?? .unattributed
                 let bucket = FileRecord.bucket(time)
                 let cost = (record["cost"] as? NSNumber)?.doubleValue
                 usage[plan, default: []].append(UsageRecord(bucket: bucket, model: model,
@@ -113,6 +113,7 @@ public actor EmpryoReader {
     /// The plan a call was billed to, named by its `modelId`; nil for a call the app has no card for
     /// (`deepseek/…`, `openrouter/…`).
     static func plan(for model: String) -> Provider? {
+        if model.hasPrefix("opencode-go/") { return .opencode }
         guard model.hasPrefix("subscriptions/") else { return nil }
         let plan = model.dropFirst("subscriptions/".count)
         for (prefix, provider) in [("claude", Provider.claude), ("gpt", .codex), ("grok", .grok),

@@ -48,34 +48,37 @@ public actor HermesReader {
         // Accumulate into arrays and buckets directly: assigning `split[plan]` back after each append
         // copies the plan's whole array every row, which is quadratic over a large database.
         var usage: [Provider: [UsageRecord]] = [:]
-        var buckets: [Provider: [Int32: Int]] = [:]
         var starts: [Provider: [Double]] = [:]
         var sessions: [Provider: Set<String>] = [:]
         let sql = """
             SELECT s.id, s.started_at, s.parent_session_id,
                    u.billing_provider, u.model, u.api_call_count,
                    u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_write_tokens,
-                   u.last_seen
+                   u.last_seen, u.first_seen
             FROM session_model_usage u JOIN sessions s ON s.id = u.session_id
             """
         let ok = db.rows(sql) { row in
-            guard let session = row.text(0), let billed = row.text(3),
-                  let plan = Self.plan(for: billed)
-            else { return }
+            guard let session = row.text(0) else { return }
+            let plan = row.text(3).flatMap(Self.plan(for:)) ?? .unattributed
             guard let input = TokenCount.parse(row.int(6)), let output = TokenCount.parse(row.int(7)),
                   let cacheRead = TokenCount.parse(row.int(8)), let cacheWrite = TokenCount.parse(row.int(9)),
                   input + output + cacheRead + cacheWrite > 0
             else { return }
             guard let seconds = row.isNull(10) ? nil : Timestamp.seconds(row.double(10)) else { return }
             let bucket = FileRecord.bucket(seconds)
-            usage[plan, default: []].append(UsageRecord(bucket: bucket, model: row.text(4) ?? "unknown",
-                                                        tokens: TokenCounts(input: input, output: output,
-                                                                            cacheRead: cacheRead, cacheWrite: cacheWrite)))
-            // A subagent's calls aren't messages or sessions of their own, but their tokens count.
+            // Older databases can lack first_seen; the session start is a conservative lower bound.
+            let first = (row.isNull(11) ? nil : Timestamp.seconds(row.double(11)))
+                ?? (row.isNull(1) ? nil : Timestamp.seconds(row.double(1))) ?? 0
+            let firstBucket = FileRecord.bucket(first <= seconds ? first : 0)
             let parent = row.text(2)
             let calls = row.int(5)
+            let mainCalls = (parent == nil || parent == "") && calls > 0 && calls < Int64(Int.max) ? Int(calls) : 0
+            usage[plan, default: []].append(UsageRecord(bucket: bucket, model: row.text(4) ?? "unknown",
+                                                        tokens: TokenCounts(input: input, output: output,
+                                                                            cacheRead: cacheRead, cacheWrite: cacheWrite),
+                                                        firstBucket: firstBucket, aggregateCalls: mainCalls))
+            // A subagent's calls aren't messages or sessions of their own, but their tokens count.
             if parent == nil || parent == "" {
-                if calls > 0, calls < Int64(Int.max) { buckets[plan, default: [:]][bucket, default: 0] += Int(calls) }
                 if !(sessions[plan]?.contains(session) ?? false), let start = row.isNull(1) ? nil : Timestamp.seconds(row.double(1)) {
                     starts[plan, default: []].append(start)
                     sessions[plan, default: []].insert(session)
@@ -88,7 +91,6 @@ public actor HermesReader {
         for (plan, records) in usage {
             var data = UsageData()
             data.usage = records
-            data.messageBuckets = buckets[plan] ?? [:]
             data.sessionStarts = starts[plan] ?? []
             data.transcriptCount = sessions[plan]?.count ?? 0
             data.scannedAt = Date()
@@ -120,6 +122,7 @@ public actor HermesReader {
         case "cursor": .cursor
         case "antigravity-oauth": .antigravity
         case "opencode-go": .opencode
+        case "kimi-coding", "kimi-coding-cn": .kimi
         default: nil
         }
     }

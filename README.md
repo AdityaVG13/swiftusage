@@ -4,7 +4,7 @@
 </picture>
 
 <p align="center">
-  Codex · Claude Code · Cursor · Grok · OpenCode · Antigravity · Muse Code · Pi · Devin
+  Codex · Claude Code · Cursor · Grok · OpenCode · Antigravity · Muse Code · Pi · Devin · Droid
 </p>
 
 <p align="center">
@@ -76,23 +76,33 @@ Screenshot Mode in the ⋯ menu puts the panel on a black pane until it closes, 
 | OpenCode | `$OPENCODE_DATA_DIR` or `~/.local/share/opencode`: `opencode*.db` |
 | Antigravity | `~/.gemini/antigravity*/conversations/*.db` |
 | Muse Code | `~/.local/share/muse/sessions/**/session.jsonl` |
-| Pi | `$PI_CODING_AGENT_DIR` or `~/.pi/agent`: `sessions/*/*.jsonl` |
+| Pi / Oh My Pi | `$PI_CODING_AGENT_SESSION_DIR`, `$PI_CODING_AGENT_DIR/sessions`, or `~/.pi/agent/sessions` and `~/.omp/agent/sessions` / `~/.zmp/agent/sessions`: nested `*.jsonl` |
 | Devin | `~/.local/share/devin`: `cli/sessions.db` and `cli-next/sessions.db` |
 | Kimi | `$KIMI_CODE_SESSION_DIR` or `~/.kimi-code/sessions`: `**/wire.jsonl`, whose `usage.record` events carry each call's tokens |
+| Droid | `$FACTORY_HOME_OVERRIDE` (a home folder, as Droid reads it) or `~/.factory`: `sessions/<session id>.jsonl` with the `<session id>.settings.json` beside it, whose `tokenUsage` holds the session's totals |
 
-Two harnesses record which plan each call was billed to, so their usage is counted on that plan's
-card rather than one of its own: **Empryo** (`~/.empryo/usage/usage-YYYY-MM.jsonl`, where a
-`modelId` such as `subscriptions/claude-opus-5-5` names the plan and `cost` is Empryo's own price)
-and **Hermes** (`~/.hermes/state.db`, `session_model_usage`, whose `billing_provider` names the
-plan). A call either names no plan this app has a card for (`deepseek/…`, `openrouter/…`) or names
-none at all (`billing_provider` blank) is left out rather than guessed at. Pi keeps its own card and
-is not split by plan.
+Empryo and Hermes record a route for each call or aggregate, so their usage is counted on that
+provider's card. Empryo reads `~/.empryo/usage/usage-YYYY-MM.jsonl`; Hermes reads `~/.hermes/state.db`.
+Pi and Oh My Pi responses with explicit Codex, Kimi, Muse Code, Grok OAuth, Cursor, Devin,
+Antigravity or OpenCode Go routes also go to those providers; ambiguous routes stay on the Pi card.
+Pi sessions and messages stay on Pi, regardless of route. A route identifies the provider, not necessarily
+the account, subscription or actual charge. Copies with the same known provider response ID count once;
+stores without a shared response ID cannot always be deduplicated. Empryo's explicit `opencode-go/`
+route is included on OpenCode. Empryo records without a matching provider card and Hermes rows with
+unknown or blank billing providers appear under **Unattributed**. They are excluded from the **All**
+provider totals because they may overlap other records; Unattributed is not a subscription or an account.
+
+Hermes records per-session/model aggregates, not per-call dates. An aggregate spanning multiple days is
+included in a range only when its whole interval falls within it; its tokens and calls are not plotted on
+a particular day. If the interval crosses the range boundary, the aggregate is excluded and the footer
+reports the uncertain tokens. Thus the displayed total can be a lower bound for that range.
 
 The variables are read from the app's own environment. Opened from Finder or at login, it doesn't see ones set in a shell profile such as `~/.zshrc`, so it reads the default folder. For Claude Code and Codex that means every folder beside it too, and every folder `CLAUDE_CONFIG_DIR` or `CODEX_HOME` has named when the app was opened from a shell; a folder that's another's through a symlink is read once. `launchctl setenv CLAUDE_CONFIG_DIR ~/somewhere` passes one to apps opened after it, until you log out, and then only that folder is read.
 
 Some history can't be counted:
 
 - **Cursor** keeps token counts on its servers. Its chats and messages are counted on this Mac, and its tokens and their cost come from the usage events its dashboard lists, asked for with the login Cursor keeps at most every five minutes: the whole history the first time, then the last two days, and kept in the cache folder. Until a login can read them, its tokens show as "–".
+- **Kimi Code** records the model but not always its billing route. Its card includes every model in its local `wire.jsonl` records, including custom or third-party models, so those records do not prove they were billed to a Kimi subscription.
 - **Antigravity** conversations from before its SQLite format are encrypted `.pb` files and are skipped.
 - **Muse Code** wasn't installed when its reader was written, so the reader follows the usage events Muse's SDK reports and hasn't been checked against a real log.
 
@@ -187,6 +197,7 @@ The rules below are Claude Code's. The other providers follow them as closely as
 - **Grok** logs usage per turn, not per response, so each model call in a turn counts as a reply.
 - **OpenCode** reported reasoning tokens inside or beside output depending on its version and the model's provider; the recorded total tells which.
 - **Pi** and **Antigravity** record usage per response.
+- **Droid** keeps one running total per session in its settings file, beside the model the session last ran on, so a session counts once and a session that ran over several days keeps its tokens in the totals and out of the daily figures. The subagents it started are sessions of their own with totals of their own: they add tokens but not sessions or messages. A session it copied beside a second project counts once, at the copy with the most tokens. Its messages are its replies; the hook notices, injected context and tool results its transcript also records aren't counted.
 - **Devin** copies messages into new rows as a session's history is rewritten, so each message counts once by its ID. Only prompts you typed count as your messages, not context Devin adds as user messages. Its hidden background sessions add tokens but not sessions.
 - Models are grouped by name, without the reasoning effort tools add to their IDs, so Opus 5.5 is one row whether Claude Code, Devin or OpenCode ran it.
 

@@ -9,7 +9,14 @@ for proj in os.listdir(root):
     for e in os.listdir(pd):
         if e.endswith('.jsonl'): mains.append(f'{proj}/{e}')
         sd = os.path.join(pd, e, 'subagents')
-        if os.path.isdir(sd): subs += [f'{proj}/{e}/subagents/{a}' for a in os.listdir(sd) if a.startswith('agent-') and a.endswith('.jsonl')]
+        if os.path.isdir(sd):
+            subs += [f'{proj}/{e}/subagents/{a}' for a in os.listdir(sd) if a.startswith('agent-') and a.endswith('.jsonl')]
+            workflows = os.path.join(sd, 'workflows')
+            if os.path.isdir(workflows):
+                for workflow in os.listdir(workflows):
+                    wd = os.path.join(workflows, workflow)
+                    if workflow.startswith('.') or not os.path.isdir(wd): continue
+                    subs += [f'{proj}/{e}/subagents/workflows/{workflow}/{a}' for a in os.listdir(wd) if a.startswith('agent-') and a.endswith('.jsonl')]
 order = sorted(mains + subs)
 def ts(s):
     try:

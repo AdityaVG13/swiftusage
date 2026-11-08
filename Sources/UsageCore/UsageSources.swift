@@ -10,6 +10,7 @@ public enum UsageSources {
         }
         let empryo = EmpryoReader()
         let hermes = HermesReader()
+        let pi = PiReader(index: index(PiTranscripts.self, root: PiTranscripts.defaultRoot))
         var sources: [any UsageSource] = [
             index(CodexTranscripts.self, root: CodexTranscripts.defaultRoot),
             index(ClaudeTranscripts.self, root: ClaudeTranscripts.defaultRoot),
@@ -19,16 +20,21 @@ public enum UsageSources {
             OpenCodeSource(),
             AntigravitySource(),
             index(MuseTranscripts.self, root: MuseTranscripts.defaultRoot),
-            index(PiTranscripts.self, root: PiTranscripts.defaultRoot),
+            PiSource(provider: .pi, reader: pi),
             DevinSource(),
+            DroidSource(),
+            index(DroidTranscripts.self, root: DroidTranscripts.defaultRoot),
             KimiSource(),
         ]
+        sources += [Provider.codex, .kimi, .muse, .grok, .opencode, .cursor, .devin, .antigravity].map {
+            PiSource(provider: $0, reader: pi)
+        }
         // Empryo and Hermes name the plan each call was billed to, so their usage feeds the plan's
         // card rather than a card of its own. Every plan's source shares one reader.
-        sources += [Provider.claude, .codex, .grok, .kimi, .cursor, .devin].map {
+        sources += [Provider.claude, .codex, .grok, .kimi, .cursor, .devin, .muse, .opencode, .unattributed].map {
             EmpryoSource(provider: $0, reader: empryo)
         }
-        sources += [Provider.codex, .muse, .grok, .zai, .nous, .claude, .cursor, .antigravity, .opencode].map {
+        sources += [Provider.codex, .muse, .grok, .zai, .nous, .claude, .cursor, .antigravity, .opencode, .kimi, .unattributed].map {
             HermesSource(provider: $0, reader: hermes)
         }
         return sources

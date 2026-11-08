@@ -674,7 +674,8 @@ struct IndexFileTests {
         full.messages = [1: 10, 2: -20, .max: .min]
         full.usage = [
             5: UsageRecord(bucket: 100, model: "gpt-5.5", tokens: TokenCounts(input: 10, output: 20, cacheRead: 30, cacheWrite: 40)),
-            6: UsageRecord(bucket: 101, model: "claude-opus-5-5", tokens: TokenCounts(input: 1), cacheWriteHour: 7, speed: .fast, cost: 0.125),
+            6: UsageRecord(bucket: 101, model: "claude-opus-5-5", tokens: TokenCounts(input: 1), cacheWriteHour: 7, speed: .fast, cost: 0.125,
+                           plan: .codex, responseID: 42, firstBucket: 90, aggregateCalls: 3),
         ]
         return ["a/one.jsonl": full, "b/two.jsonl": FileRecord(isSubagent: false), "c/ünïcode.jsonl": FileRecord(isSubagent: false)]
     }

@@ -1,4 +1,5 @@
 .build/
+.asgrep/
 build/
 .swiftpm/
 .DS_Store

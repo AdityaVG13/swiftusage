@@ -13,9 +13,8 @@ import Foundation
 public enum CodexTranscripts: TranscriptFormat {
     public static let provider = Provider.codex
     public static let cacheName = "codex-index.json"
-    /// 4: counts are keyed by what they count, turns that don't date themselves are no longer taken for
-    /// replays, and responses are dated no earlier than their turn.
-    public static let cacheVersion = 4
+    /// 5: per-response IDs allow cross-client deduplication.
+    public static let cacheVersion = 5
     public static let upgradableCacheVersion = 2
 
     public static var defaultRoot: URL {
@@ -195,9 +194,11 @@ public enum CodexTranscripts: TranscriptFormat {
                 context["counted"] = counted.isEmpty ? nil : counted.map(String.init).joined(separator: " ")
             }
             if let thread = payload["thread_id"] as? String, let own = context["thread"], thread != own { break }
-            let key = (payload["response_id"] as? String).map { JSONLine.key("codex", $0) } ?? lineKey
+            let response = (payload["response_id"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            let key = response.map { JSONLine.key("codex", $0) } ?? lineKey
+            let identity = response.map { JSONLine.key("plan-response", Provider.codex.rawValue, $0) }
             record.usage[key] = UsageRecord(bucket: FileRecord.bucket(at), model: record.model ?? "unknown", tokens: counts,
-                                            speed: speed(context["tier"]))
+                                            speed: speed(context["tier"]), responseID: identity)
             name(key)
         case "token_count":
             // Superseded by per-response records once a file has them.

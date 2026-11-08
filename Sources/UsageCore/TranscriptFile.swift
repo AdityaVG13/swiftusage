@@ -13,14 +13,27 @@ public struct UsageRecord: Codable, Sendable, Hashable {
     /// Dollars, for tools that log what each response cost (Grok, Pi, OpenCode). Never infinite or NaN,
     /// which a database's REAL column can hold.
     public var cost: Double?
+    /// A known plan for a call made through a multi-provider client; nil stays on the client's card.
+    public var plan: Provider?
+    /// A provider-scoped response identity, when both stores can name the same response.
+    public var responseID: UInt64?
+    /// Earliest possible bucket of an aggregate; nil means the response occurred in `bucket`.
+    public var firstBucket: Int32?
+    /// Calls represented by a main-session aggregate, rather than separately dated messages.
+    public var aggregateCalls: Int = 0
 
-    public init(bucket: Int32, model: String, tokens: TokenCounts, cacheWriteHour: Int64 = 0, speed: Speed = .standard, cost: Double? = nil) {
+    public init(bucket: Int32, model: String, tokens: TokenCounts, cacheWriteHour: Int64 = 0, speed: Speed = .standard, cost: Double? = nil,
+                plan: Provider? = nil, responseID: UInt64? = nil, firstBucket: Int32? = nil, aggregateCalls: Int = 0) {
         self.bucket = bucket
         self.model = model
         self.tokens = tokens
         self.cacheWriteHour = cacheWriteHour
         self.speed = speed
         self.cost = cost.flatMap { $0.isFinite ? $0 : nil }
+        self.plan = plan
+        self.responseID = responseID
+        self.firstBucket = firstBucket
+        self.aggregateCalls = max(0, aggregateCalls)
     }
 
     /// Dollars at API rates: what the tool logged, or else an estimate from `prices`. Nil when neither
@@ -31,7 +44,7 @@ public struct UsageRecord: Codable, Sendable, Hashable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case bucket = "b", model = "m", tokens = "t", cacheWriteHour = "h", speed = "s", cost = "c"
+        case bucket = "b", model = "m", tokens = "t", cacheWriteHour = "h", speed = "s", cost = "c", plan = "p", responseID = "r", firstBucket = "f", aggregateCalls = "a"
     }
 
     // The pricing details are left out when they're the default, which is nearly always.
@@ -43,6 +56,10 @@ public struct UsageRecord: Codable, Sendable, Hashable {
         cacheWriteHour = TokenCount.clamped(try container.decodeIfPresent(Int64.self, forKey: .cacheWriteHour) ?? 0)
         speed = try container.decodeIfPresent(Speed.self, forKey: .speed) ?? .standard
         cost = try container.decodeIfPresent(Double.self, forKey: .cost).flatMap { $0.isFinite ? $0 : nil }
+        plan = try container.decodeIfPresent(Provider.self, forKey: .plan)
+        responseID = try container.decodeIfPresent(UInt64.self, forKey: .responseID)
+        firstBucket = try container.decodeIfPresent(Int32.self, forKey: .firstBucket)
+        aggregateCalls = max(0, try container.decodeIfPresent(Int.self, forKey: .aggregateCalls) ?? 0)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -53,6 +70,10 @@ public struct UsageRecord: Codable, Sendable, Hashable {
         if cacheWriteHour != 0 { try container.encode(cacheWriteHour, forKey: .cacheWriteHour) }
         if speed != .standard { try container.encode(speed, forKey: .speed) }
         try container.encodeIfPresent(cost, forKey: .cost)
+        try container.encodeIfPresent(plan, forKey: .plan)
+        try container.encodeIfPresent(responseID, forKey: .responseID)
+        try container.encodeIfPresent(firstBucket, forKey: .firstBucket)
+        if aggregateCalls != 0 { try container.encode(aggregateCalls, forKey: .aggregateCalls) }
     }
 }
 

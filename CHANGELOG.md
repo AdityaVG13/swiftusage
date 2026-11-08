@@ -4,7 +4,7 @@
 
 The first release. SwiftUsage needs macOS 26 or later, on Apple silicon or Intel.
 
-- Usage history from Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Muse Code, Pi and Devin, read locally from each tool's own files: sessions, messages, tokens, cost at API rates, active days, peak hour, favorite model and an activity heatmap, for all time, 30 days or 7 days, per provider or all together.
+- Usage history from Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Muse Code, Pi, Devin and Droid, read locally from each tool's own files: sessions, messages, tokens, cost at API rates, active days, peak hour, favorite model and an activity heatmap, for all time, 30 days or 7 days, per provider or all together.
 - Claude Code's and Codex's history is read from every config folder, as their limits are: `~/.claude_personal`, `~/.config/claude` and other Claude Code folders, and Codex homes such as `~/.codex-work`. When `CLAUDE_CONFIG_DIR` or `CODEX_HOME` is set, only that folder is read.
 - Cursor's tokens come from the usage events Cursor's dashboard lists, asked for with the login Cursor keeps, with the cost Cursor priced each request at.
 - The Models tab: tokens per day stacked by model, and each model's tokens, cost and share.

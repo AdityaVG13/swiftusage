@@ -38,10 +38,25 @@ public struct UsageData: Sendable {
     /// Several providers' usage as one.
     public static func merged(_ parts: [UsageData]) -> UsageData {
         var data = UsageData()
+        var identified: [UInt64: Int] = [:]
         for part in parts {
             data.sessionStarts += part.sessionStarts
             data.messageBuckets.merge(part.messageBuckets, uniquingKeysWith: +)
-            data.usage += part.usage
+            for record in part.usage {
+                guard let id = record.responseID else {
+                    data.usage.append(record)
+                    continue
+                }
+                if let index = identified[id] {
+                    let kept = data.usage[index]
+                    if record.tokens.total > kept.tokens.total || (record.tokens.total == kept.tokens.total && kept.cost == nil && record.cost != nil) {
+                        data.usage[index] = record
+                    }
+                } else {
+                    identified[id] = data.usage.count
+                    data.usage.append(record)
+                }
+            }
             data.transcriptCount += part.transcriptCount
         }
         data.scannedAt = parts.map(\.scannedAt).max() ?? Date()
@@ -75,7 +90,7 @@ public protocol UsageSource: Actor {
     /// Forgets saved state and reads everything again.
     func rebuild(progress: (@Sendable (ScanProgress) -> Void)?) async -> UsageData
     /// Writes saved state to disk, if the source keeps any.
-    func save()
+    func save() async
 }
 
 public struct TranscriptInfo: Sendable {

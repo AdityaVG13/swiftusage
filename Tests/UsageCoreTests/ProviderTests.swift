@@ -316,6 +316,121 @@ struct ProviderTests {
 
     // MARK: Pi
 
+    @Test func piFindsNestedAgentTranscriptsWithoutCountingTheirSessions() async throws {
+        let home = try TempProjects()
+        let time = "2026-10-18T10:00:00Z"
+        func transcript(_ id: String, _ response: String, _ input: Int) -> [String] {
+            [json(["type": "session", "id": id, "timestamp": time]),
+             json(["type": "message", "id": id, "timestamp": time,
+                   "message": ["role": "assistant", "model": "k3", "provider": "kimi-code", "responseId": response,
+                               "usage": ["input": input, "output": 1, "cacheRead": 0, "cacheWrite": 0]]])]
+        }
+        try home.write("work/main.jsonl", transcript("main", "r1", 10))
+        try home.write("work/main/child.jsonl", transcript("child", "r2", 20))
+        try home.write("work/main/child/grandchild.jsonl", transcript("grandchild", "r3", 30))
+        let data = await TranscriptIndex<PiTranscripts>(root: home.root, cacheURL: nil).refresh()
+        #expect(data.usage.reduce(Int64(0)) { $0 + $1.tokens.total } == 63)
+        #expect(data.sessionStarts.count == 1)
+        #expect(data.messageBuckets.values.reduce(0, +) == 1)
+    }
+
+    @Test func piDiscoversOtherRootsThroughSymlinksOnlyOnce() throws {
+        let home = try TempProjects()
+        let main = home.root.appendingPathComponent("pi")
+        let other = home.root.appendingPathComponent("omp")
+        let alias = home.root.appendingPathComponent("alias")
+        try home.write("pi/work/main.jsonl", ["{}"])
+        try home.write("omp/work/main.jsonl", ["{}"])
+        try home.write("omp/direct.jsonl", ["{}"])
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: other)
+        let found = PiTranscripts.discover(in: main, others: [alias, other])
+        #expect(found.count == 3)
+    }
+
+    @Test func multiDayAggregateIsNotFalselyAssignedToItsLastDay() {
+        let first = FileRecord.bucket(Timestamp.parse("2026-10-01T10:00:00Z")!)
+        let last = FileRecord.bucket(Timestamp.parse("2026-10-18T10:00:00Z")!)
+        var data = UsageData()
+        data.usage = [UsageRecord(bucket: last, model: "gpt-5.5", tokens: TokenCounts(input: 100), firstBucket: first, aggregateCalls: 4)]
+        let all = StatsBuilder.build(data, range: .all, now: now, clock: utc)
+        let week = StatsBuilder.build(data, range: .days7, now: now, clock: utc)
+        #expect(all.totalTokens == 100)
+        #expect(all.unallocatedTokens == 100)
+        #expect(all.messages == 4 && all.unallocatedMessages == 4)
+        #expect(all.days.values.reduce(0) { $0 + $1.messages } == 0)
+        #expect(all.days.values.reduce(Int64(0)) { $0 + $1.tokens } == 0)
+        #expect(week.totalTokens == 0 && week.messages == 0)
+        #expect(week.excludedUncertainTokens == 100 && week.excludedUncertainMessages == 4)
+    }
+
+    @Test func mergedSourcesCountAnIdentifiedResponseOnce() {
+        let id: UInt64 = 123
+        var first = UsageData(), second = UsageData()
+        first.usage = [UsageRecord(bucket: 1, model: "gpt", tokens: TokenCounts(input: 100), responseID: id)]
+        second.usage = [UsageRecord(bucket: 1, model: "gpt", tokens: TokenCounts(input: 100), responseID: id),
+                        UsageRecord(bucket: 1, model: "gpt", tokens: TokenCounts(input: 20))]
+        let merged = UsageData.merged([first, second])
+        #expect(merged.usage.count == 2)
+        #expect(merged.usage.reduce(Int64(0)) { $0 + $1.tokens.total } == 120)
+    }
+
+    @Test func codexAndPiDeduplicateOnlySharedResponseIDs() async throws {
+        let home = try TempProjects()
+        let thread = uuid7("2026-10-18T10:00:00Z", 1)
+        let time = "2026-10-18T10:00:00Z"
+        try home.write("codex/sessions/2026/10/18/rollout-x-\(thread).jsonl", [
+            json(["timestamp": time, "type": "session_meta", "payload": ["id": thread, "timestamp": time]]),
+            json(["timestamp": time, "type": "event_msg", "payload": ["type": "token_usage_record", "thread_id": thread,
+                                                                           "response_id": "shared", "usage": codexUsage(100, cached: 40, output: 10)]]),
+        ])
+        func message(_ id: String, response: String?) -> String {
+            var message: [String: Any] = ["role": "assistant", "model": "gpt-5.5", "provider": "openai-codex",
+                                          "usage": ["input": 60, "output": 10, "cacheRead": 40, "cacheWrite": 0]]
+            if let response { message["responseId"] = response }
+            return json(["type": "message", "id": id, "timestamp": time, "message": message])
+        }
+        try home.write("pi/work/main.jsonl", [message("one", response: "shared"), message("two", response: nil)])
+        let codex = await TranscriptIndex<CodexTranscripts>(root: home.root.appendingPathComponent("codex"), cacheURL: nil).refresh()
+        let pi = await PiSource(provider: .codex, index: TranscriptIndex<PiTranscripts>(root: home.root.appendingPathComponent("pi"), cacheURL: nil)).refresh()
+        let combined = UsageData.merged([codex, pi])
+        #expect(codex.usage.count == 1 && pi.usage.count == 2)
+        #expect(combined.usage.count == 2)
+        #expect(combined.usage.reduce(Int64(0)) { $0 + $1.tokens.total } == 220)
+    }
+
+    @Test func piRoutesExplicitPlansAndKeepsUnknownUsageOnPi() async throws {
+        let home = try TempProjects()
+        let time = "2026-10-18T10:00:00Z"
+        func message(_ id: String, _ provider: String, _ input: Int) -> String {
+            json(["type": "message", "id": id, "timestamp": time,
+                  "message": ["role": "assistant", "model": "model", "provider": provider, "responseId": id,
+                              "usage": ["input": input, "output": 0, "cacheRead": 0, "cacheWrite": 0]]])
+        }
+        try home.write("work/main.jsonl", [
+            json(["type": "session", "id": "s", "timestamp": time]),
+            message("codex", "openai-codex-account-2", 100),
+            message("kimi", "kimi-code", 200),
+            message("unknown", "openrouter", 300),
+        ])
+        let index = TranscriptIndex<PiTranscripts>(root: home.root, cacheURL: nil)
+        let codex = await PiSource(provider: .codex, index: index).refresh()
+        let kimi = await PiSource(provider: .kimi, index: index).refresh()
+        let pi = await PiSource(provider: .pi, index: index).refresh()
+        #expect(codex.usage.map(\.tokens.total) == [100])
+        #expect(kimi.usage.map(\.tokens.total) == [200])
+        #expect(pi.usage.map(\.tokens.total) == [300])
+        #expect(pi.sessionStarts.count == 1)
+        #expect(codex.sessionStarts.isEmpty && kimi.sessionStarts.isEmpty)
+        #expect(PiTranscripts.plan(for: "openai-codex-account-2") == .codex)
+        #expect(PiTranscripts.plan(for: "openai-codex-account-evil") == nil)
+        #expect(PiTranscripts.plan(for: "kimi-coding") == .kimi)
+        #expect(PiTranscripts.plan(for: "xai-auth") == .grok)
+        #expect(PiTranscripts.plan(for: "cursor-account-2") == .cursor)
+        #expect(PiTranscripts.plan(for: "cursor-account-evil") == nil)
+        #expect(PiTranscripts.plan(for: "anthropic") == nil)
+        #expect(HermesReader.plan(for: "kimi-coding") == .kimi)
+    }
+
     @Test func piCountsForkCopiesOnceAndCompactions() async throws {
         let home = try TempProjects()
         func assistant(_ id: String, _ time: String, input: Int) -> String {

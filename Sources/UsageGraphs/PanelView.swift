@@ -156,10 +156,23 @@ private struct Caption: View {
         if provider == nil, store.providersWithData.isEmpty {
             return "No coding agent history found on this Mac yet."
         }
+        if provider == .unattributed, state.tab != .limits {
+            let detail: String?
+            if state.tab == .overview, let day = state.hoveredDay {
+                detail = dayDescription(day, stats: stats)
+            } else if state.tab == .models {
+                detail = state.chartHover
+            } else {
+                detail = nil
+            }
+            let note = aggregateNote(stats).map { " " + $0 } ?? ""
+            return (detail.map { $0 + " · " } ?? "") + "Excluded from All; may overlap other usage." + note
+        }
         let noUsage = "No \(provider?.name ?? "coding agent") usage in this period."
         switch state.tab {
         case .overview:
             if let day = state.hoveredDay { return dayDescription(day, stats: stats) }
+            if let note = aggregateNote(stats) { return note }
             if provider == .cursor {
                 return "Cursor keeps token counts on its servers, not on this Mac."
             }
@@ -168,6 +181,7 @@ private struct Caption: View {
             return sentences[store.comparisonIndex % sentences.count]
         case .models:
             if let hover = state.chartHover { return hover }
+            if let note = aggregateNote(stats) { return note }
             guard let favorite = stats.favoriteModel else {
                 return provider == .cursor ? "Cursor doesn't record token counts on this Mac." : noUsage
             }
@@ -179,6 +193,20 @@ private struct Caption: View {
         case .limits:
             return limitsText
         }
+    }
+
+    /// A note when an aggregate can't be assigned to a precise day or range.
+    private func aggregateNote(_ stats: RangeStats) -> String? {
+        if stats.excludedUncertainTokens > 0, stats.unallocatedTokens > 0 {
+            return "\(Format.compact(stats.excludedUncertainTokens)) tokens excluded at range boundary; \(Format.compact(stats.unallocatedTokens)) lack daily dates."
+        }
+        if stats.excludedUncertainTokens > 0 {
+            return "\(Format.compact(stats.excludedUncertainTokens)) tokens excluded: usage spans this range's boundary."
+        }
+        if stats.unallocatedTokens > 0 {
+            return "\(Format.compact(stats.unallocatedTokens)) tokens included without a daily breakdown."
+        }
+        return nil
     }
 
     /// The limit under the pointer, else the one closest to running out.

@@ -277,7 +277,10 @@ final class UsageStore {
             }
             let today = clock.day(of: now.timeIntervalSince1970)
             for range in StatsRange.allCases {
-                result[nil, default: [:]][range] = RangeStats.merged(Provider.allCases.compactMap { result[$0]?[range] }, range: range, today: today)
+                let parts = Dictionary(uniqueKeysWithValues: Provider.allCases.compactMap { provider in
+                    result[provider]?[range].map { (provider, $0) }
+                })
+                result[nil, default: [:]][range] = RangeStats.mergedProviders(parts, range: range, today: today)
             }
             return result == current ? nil : result
         }.value

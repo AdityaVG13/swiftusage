@@ -11,7 +11,11 @@ for day in sorted(set(a['days']) | set(b['days'])):
         if tx != ty: problems += 1; print(f'{day} {m}: app {tx} vs reference {ty}')
 if a['hours'] != b['hours']: problems += 1; print('hours differ', a['hours'], b['hours'])
 for r in a['ranges']:
-    if a['ranges'][r] != b['ranges'][r]: problems += 1; print(r, 'app', a['ranges'][r], 'reference', b['ranges'][r])
+    # The transcript reference has no uncertain session aggregates; their expected counts are zero.
+    expected = dict(b['ranges'][r])
+    for f in ('unallocatedTokens', 'excludedUncertainTokens', 'unallocatedMessages', 'excludedUncertainMessages'):
+        expected.setdefault(f, 0)
+    if a['ranges'][r] != expected: problems += 1; print(r, 'app', a['ranges'][r], 'reference', expected)
 cells = sum(len(v.get('tokens', {})) * 4 + 2 for v in a['days'].values())
 print(f'compared {len(a["days"])} days, {cells} day/model/field values, 24 hours, 3 ranges: {"IDENTICAL" if problems == 0 else f"{problems} DIFFERENCES"}')
 print(json.dumps(a['ranges'], indent=1))

@@ -76,6 +76,7 @@ struct TokenChartData {
         var total: Int64
     }
 
+    let hasUndatedUsage: Bool
     let firstDay: Int
     let lastBucket: Int
     /// Daily bars for short spans, weekly once a range covers more than about two months.
@@ -89,6 +90,7 @@ struct TokenChartData {
     let ticks: [Int64]
 
     init(stats: RangeStats) {
+        hasUndatedUsage = stats.unallocatedTokens > 0
         firstDay = stats.firstDay
         bucketDays = stats.today - stats.firstDay + 1 > 62 ? 7 : 1
         lastBucket = stats.firstDay + (stats.today - stats.firstDay) / bucketDays * bucketDays
@@ -164,7 +166,7 @@ private struct TokenChart: View {
                 drawBars(data.buckets.filter { $0.day == hovered }, in: &context, layout: Layout(size: size, data: data))
             }
             if data.buckets.isEmpty {
-                Text("No usage in this period")
+                Text(data.hasUndatedUsage ? "No daily breakdown available" : "No usage in this period")
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
             }

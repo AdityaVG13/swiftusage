@@ -225,6 +225,9 @@ enum Dump {
                 for range in StatsRange.allCases {
                     let s = StatsBuilder.build(data, range: range, prices: prices)
                     print("  [\(range.rawValue)] sessions \(Format.grouped(s.sessions))  messages \(Format.grouped(s.messages))  tokens \(Format.compact(s.totalTokens)) (\(s.totalTokens))  cost \(Format.dollars(s.cost))  active days \(s.activeDays)  peak hour \(s.peakHour.map(Format.hour) ?? "–")  favorite \(s.favoriteModel?.name ?? "–")")
+                    if s.unallocatedTokens > 0 || s.excludedUncertainTokens > 0 {
+                        print("      aggregated without daily dates: \(s.unallocatedTokens) tokens; excluded across range boundary: \(s.excludedUncertainTokens) tokens")
+                    }
                     if !s.unpricedModels.isEmpty {
                         let ids = StatsBuilder.build(data, range: range, groupingModels: false, prices: prices).unpricedModels
                         print("      unpriced: \(ids.joined(separator: ", "))")
@@ -260,6 +263,8 @@ enum Dump {
         var tokens: [String: [String: [Int64]]] = [:]
         for record in data.usage where record.model != "<synthetic>" && record.tokens.total > 0 {
             let day = dayString(clock.day(of: Double(record.bucket) * 900))
+            if let first = record.firstBucket, clock.day(of: Double(first) * 900) != clock.day(of: Double(record.bucket) * 900) { continue }
+            if record.aggregateCalls > 0 { bump(clock.day(of: Double(record.bucket) * 900), "messages", record.aggregateCalls) }
             var t = tokens[day, default: [:]][record.model, default: [0, 0, 0, 0]]
             t[0] += record.tokens.input; t[1] += record.tokens.output; t[2] += record.tokens.cacheRead; t[3] += record.tokens.cacheWrite
             tokens[day, default: [:]][record.model] = t
@@ -273,6 +278,8 @@ enum Dump {
             ranges[range.rawValue] = [
                 "sessions": s.sessions, "messages": s.messages, "totalTokens": NSNumber(value: s.totalTokens),
                 "activeDays": s.activeDays, "peakHour": s.peakHour as Any? ?? NSNull(), "favoriteModel": s.favoriteModel?.id as Any? ?? NSNull(),
+                "unallocatedTokens": NSNumber(value: s.unallocatedTokens), "excludedUncertainTokens": NSNumber(value: s.excludedUncertainTokens),
+                "unallocatedMessages": s.unallocatedMessages, "excludedUncertainMessages": s.excludedUncertainMessages,
             ]
         }
         // What the panel itself reads, to check StatsBuilder's per-day totals against the raw data.

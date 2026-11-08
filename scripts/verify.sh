@@ -6,7 +6,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 SOURCE="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/projects"
-WORK=$(mktemp -d /tmp/swiftusage-verify.XXXXXX)
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/swiftusage-verify.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 
 swift build -c release --product swiftusage >/dev/null
@@ -16,11 +16,11 @@ mkdir -p "$WORK/snapshot"
 cp -cRH "$SOURCE" "$WORK/snapshot/projects"
 echo "Snapshot: $(find "$WORK/snapshot/projects" -name '*.jsonl' | wc -l | tr -d ' ') transcripts"
 
-CLAUDE_CONFIG_DIR="$WORK/snapshot" "$BIN" --dump --provider claude --cold --json > "$WORK/app.json"
 python3 -I scripts/verify/reference.py "$WORK/snapshot/projects" > "$WORK/reference.json"
-echo "\nApp vs independent reference:"
-python3 -I scripts/verify/compare.py "$WORK/app.json" "$WORK/reference.json"
-
+# --dump also includes Claude-routed Hermes and Empryo usage. Replay isolates Claude transcripts,
+# so both sides of this comparison describe the same frozen corpus.
 "$BIN" --replay "$WORK/snapshot/projects" "$WORK/replay" "$WORK/replay" >/dev/null
+echo "\nOne-pass reader vs independent reference:"
+python3 -I scripts/verify/compare.py "$WORK/replay-onepass.json" "$WORK/reference.json"
 echo "\nRead in random chunks vs reference:"
-python3 -I scripts/verify/compare.py "$WORK/replay-incremental.json" "$WORK/reference.json" | grep -v '^[ {}]'
+python3 -I scripts/verify/compare.py "$WORK/replay-incremental.json" "$WORK/reference.json"
