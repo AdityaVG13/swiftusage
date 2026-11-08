@@ -17,6 +17,8 @@ struct LimitProblemTests {
         ("xAI's usage service is unavailable right now.", .serviceUnavailable),
         ("ChatGPT's usage API answered HTTP 404.", .httpClientError),
         ("Cursor's usage API answered HTTP 502.", .httpServerError),
+        ("Factory didn't accept this login. Run `droid` to sign in again.", .loginExpired),
+        ("This Factory account has no active subscription.", .notAvailable),
         ("Devin's usage API sent something unexpected.", .unexpectedResponse),
         ("Anthropic's usage API sent no limits the app knows.", .unexpectedResponse),
         ("Cursor didn't report included usage for this plan.", .unexpectedResponse),

@@ -473,7 +473,7 @@ struct LimitsTests {
 
     @Test func droidSaysWhenNoPlanIsOn() {
         let off = DroidLimits.limits(["hasActiveSubscription": false], id: "droid:x", account: nil, plan: nil)
-        #expect(off.problem == "No Factory plan is on this account.")
+        #expect(off.problem == "This Factory account has no active subscription.")
         #expect(off.meters.isEmpty)
         // An answer with neither windows nor a plan is unexpected, not empty on purpose.
         let empty = DroidLimits.limits([:], id: "d", account: nil, plan: nil)

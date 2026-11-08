@@ -62,27 +62,51 @@ public struct DroidLimits: LimitsSource {
     }
 
     static func credentials(root: URL) -> Credentials {
-        // The login keychain first, as the CLI writes that unless it was told not to.
-        if let sealed = try? String(contentsOf: root.appendingPathComponent("auth.v2.loginkeychain"), encoding: .utf8) {
-            let item = Keychain.Item(service: "Factory CLI", account: "auth-encryption-key-security-cli")
-            switch key(from: item) {
-            case .key(let key): return opened(sealed, key: key, store: "loginkeychain")
-            case .needsPermission: return .waiting(item, store: "loginkeychain")
-            case .missing: break
-            }
+        struct Store {
+            var name: String
+            var sealed: URL
+            /// The keychain item that holds the key, for the stores that keep it there.
+            var item: Keychain.Item?
+            /// The file that holds the key, for the store that keeps it beside the sealed login.
+            var plain: URL?
         }
-        if let sealed = try? String(contentsOf: root.appendingPathComponent("auth.v2.keyring"), encoding: .utf8) {
-            let item = Keychain.Item(service: "Factory CLI", account: "auth-encryption-key")
-            switch key(from: item) {
-            case .key(let key): return opened(sealed, key: key, store: "keyring")
-            case .needsPermission: return .waiting(item, store: "keyring")
-            case .missing: break
+        let stores = [
+            Store(name: "loginkeychain", sealed: root.appendingPathComponent("auth.v2.loginkeychain"),
+                  item: Keychain.Item(service: "Factory CLI", account: "auth-encryption-key-security-cli"), plain: nil),
+            Store(name: "keyring", sealed: root.appendingPathComponent("auth.v2.keyring"),
+                  item: Keychain.Item(service: "Factory CLI", account: "auth-encryption-key"), plain: nil),
+            Store(name: "file", sealed: root.appendingPathComponent("auth.v2.file"), item: nil,
+                  plain: root.appendingPathComponent("auth.v2.key")),
+        ]
+        // The store the CLI wrote last is the login it's using, whichever it was told to keep.
+        let present = stores.compactMap { store -> (Store, Date)? in
+            guard let date = (try? FileManager.default.attributesOfItem(atPath: store.sealed.path))?[.modificationDate] as? Date
+            else { return nil }
+            return (store, date)
+        }.sorted { $0.1 > $1.1 }
+        for (store, _) in present {
+            guard let sealed = try? String(contentsOf: store.sealed, encoding: .utf8) else { continue }
+            let reading: KeyReading
+            if let item = store.item {
+                reading = key(from: item)
+            } else if let plain = store.plain, let written = try? String(contentsOf: plain, encoding: .utf8),
+                      let key = written.decoded {
+                reading = .key(key)
+            } else {
+                reading = .missing
             }
-        }
-        if let sealed = try? String(contentsOf: root.appendingPathComponent("auth.v2.file"), encoding: .utf8),
-           let written = try? String(contentsOf: root.appendingPathComponent("auth.v2.key"), encoding: .utf8),
-           let key = written.decoded {
-            return opened(sealed, key: key, store: "file")
+            switch reading {
+            case .key(let key):
+                // A sealed file the key doesn't open is a store this Mac can't use; an older one still might.
+                let login = opened(sealed, key: key, store: store.name)
+                if case .none = login { continue }
+                return login
+            case .needsPermission:
+                if let item = store.item { return .waiting(item, store: store.name) }
+                continue
+            case .missing:
+                continue
+            }
         }
         return .none
     }
@@ -144,7 +168,7 @@ public struct DroidLimits: LimitsSource {
         }
         switch response.status {
         case 200..<300: break
-        case 401, 403: return .failed(login.id, .droid, account: login.account, plan: plan, "Factory turned this login away. Run `droid` to sign in again.")
+        case 401, 403: return .failed(login.id, .droid, account: login.account, plan: plan, "Factory didn't accept this login. Run `droid` to sign in again.")
         case 429: return .failed(login.id, .droid, account: login.account, plan: plan, "Factory is limiting requests. Try again in a little while.")
         case 500...: return .failed(login.id, .droid, account: login.account, plan: plan, "Factory's usage service is unavailable right now.")
         default: return .failed(login.id, .droid, account: login.account, plan: plan, "Factory's usage API answered HTTP \(response.status).")
@@ -175,7 +199,7 @@ public struct DroidLimits: LimitsSource {
             result.notes.append(LimitNote(id: "extra-usage", label: "Extra usage", value: Format.dollars(cents / 100)))
         }
         if body["hasActiveSubscription"] as? Bool == false {
-            result.problem = "No Factory plan is on this account."
+            result.problem = "This Factory account has no active subscription."
         } else if !result.hasValues {
             result.problem = "Factory's usage API sent something unexpected."
         }
