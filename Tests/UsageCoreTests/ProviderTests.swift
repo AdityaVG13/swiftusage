@@ -993,3 +993,62 @@ extension ProviderTests {
         #expect(stats.messages == 3)
     }
 }
+
+extension ProviderTests {
+    @Test func cursorIndexKeepsEveryField() {
+        var chat = CursorSource.Chat(id: "hash/agent")
+        chat.stamp = DatabaseStamp(size: 10, modified: 1.5, walSize: 3, walModified: 2.5)
+        chat.sessions = [100, 200]
+        chat.messages = [1: 5, 2: 6]
+        chat.usage = [
+            1: UsageRecord(bucket: 5, model: "claude-opus-5-5", tokens: TokenCounts(input: 1, output: 2, cacheRead: 3, cacheWrite: 4),
+                           cacheWriteHour: 2, speed: .fast, cost: 0.25),
+            2: UsageRecord(bucket: 6, model: "cursor", tokens: TokenCounts(input: 7)),
+        ]
+        let saved = CursorIndex.decode(Data(CursorIndex.encode(["/chat": chat, "/ide": CursorSource.Chat(id: "ide")])))
+        #expect(saved?.count == 2)
+        #expect(saved?["/chat"]?.id == chat.id)
+        #expect(saved?["/chat"]?.stamp == chat.stamp)
+        #expect(saved?["/chat"]?.sessions == chat.sessions)
+        #expect(saved?["/chat"]?.messages == chat.messages)
+        #expect(saved?["/chat"]?.usage == chat.usage)
+        #expect(saved?["/ide"]?.stamp == nil)
+        #expect(CursorIndex.decode(Data(CursorIndex.encode(["/chat": chat]).dropLast())) == nil)
+    }
+
+    @Test func cursorRelaunchReadsTheIDEDatabaseCursorWroteToWhileClosed() async throws {
+        let home = try TempProjects()
+        let state = home.root.appendingPathComponent("state.vscdb")
+        let cache = home.root.appendingPathComponent("cache/cursor-local.json")
+        let created = 1792317600000
+        func run(_ sql: String) {
+            var db: OpaquePointer?
+            #expect(sqlite3_open(state.path, &db) == SQLITE_OK)
+            #expect(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK)
+            sqlite3_close(db)
+        }
+        func bubble(_ id: String) {
+            run(#"INSERT INTO cursorDiskKV VALUES ('bubbleId:c1:\#(id)', '{"type":1,"createdAt":\#(created),"tokenCount":{"inputTokens":10,"outputTokens":5}}')"#)
+        }
+        func launch(readOnly: Bool = false) -> CursorSource {
+            CursorSource(chatsURL: home.root.appendingPathComponent("chats"), ideStateURL: state, cacheURL: cache, readOnly: readOnly)
+        }
+        run("CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)")
+        run(#"INSERT INTO cursorDiskKV VALUES ('composerData:c1', '{"createdAt":\#(created),"fullConversationHeadersOnly":[{}]}')"#)
+        bubble("b1")
+
+        // Saved once read, without waiting for the app to quit.
+        #expect(await launch().refresh().messageBuckets.values.reduce(0, +) == 1)
+        #expect(FileManager.default.fileExists(atPath: CursorSource.binaryURL(cache).path))
+
+        // Cursor runs while the app is closed; its modification time is what tells the next launch.
+        try await Task.sleep(for: .milliseconds(10))
+        bubble("b2")
+        #expect(await launch().refresh().messageBuckets.values.reduce(0, +) == 2)
+
+        // A read-only run takes what's saved and never writes it.
+        try FileManager.default.removeItem(at: CursorSource.binaryURL(cache))
+        #expect(await launch(readOnly: true).refresh().messageBuckets.values.reduce(0, +) == 2)
+        #expect(!FileManager.default.fileExists(atPath: CursorSource.binaryURL(cache).path))
+    }
+}
