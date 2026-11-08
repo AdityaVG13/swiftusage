@@ -108,7 +108,7 @@ Some history can't be counted:
 
 ## Limits
 
-Each provider is asked for its limits every five minutes (Customize → General sets anything from one minute to an hour), just after a limit's window resets, when the panel opens (at most once a minute, or every 30 seconds at the one-minute setting) and whenever you click Refresh, with the login its tool already keeps; while it's being asked, the footer says so. Logins are only read, never changed, except one whose access token has run out (Claude Code, Codex, Grok) or is about to (Cursor), which is renewed and saved back the way its tool renews it, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read.
+Each provider is asked for its limits every five minutes (Customize → General sets anything from one minute to an hour), just after a limit's window resets, when the panel opens (at most once a minute, or every 30 seconds at the one-minute setting) and whenever you click Refresh, with the login its tool already keeps; while it's being asked, the footer says so. Logins are only read, never changed, except one whose access token has run out (Claude Code, Codex, Grok) or is about to (Cursor), which is renewed and saved back the way its tool renews it, so the tools keep working exactly as before. When a login has expired, the card says which command renews it and keeps showing the last values it read. Droid's login is read from the copy its CLI seals and never renewed: once it has run out, the card says to run `droid`.
 
 | Provider | Login read from | Shows |
 | --- | --- | --- |
@@ -120,6 +120,7 @@ Each provider is asked for its limits every five minutes (Customize → General 
 | Antigravity | the app's and `agy`'s keychain items (`gemini`), and `agy`'s `~/.gemini/jetski-standalone-oauth-token` | Gemini and Claude pools, five-hour and weekly, and Argon's week |
 | Pi | `~/.pi/agent/auth.json` | the Claude, ChatGPT and Grok subscriptions Pi is signed in to |
 | Devin | `~/.local/share/devin/credentials.toml`, then the app's `state.vscdb` (Devin's and Devin - Next's) if Devin turns that key away | Daily and weekly quota, extra usage balance |
+| Droid | `~/.factory`: `auth.v2.loginkeychain` (its key in the keychain, "Factory CLI"), `auth.v2.keyring`, or `auth.v2.file` with `auth.v2.key` | 5-hour, weekly and monthly windows, extra usage balance |
 | Nous Portal | `~/.hermes/shared/nous_auth.json`, then `~/.hermes/auth.json` | Today, this week and this month's usage, the large-model month, top-up credits, Keep going on credits |
 | Z.AI | Hermes's key in `~/.hermes/.env`, else CodexBar's config or the environment | 5-hour and weekly tokens, the monthly MCP allowance, credits |
 | Kimi | Hermes's `KIMI_API_KEY` in `~/.hermes/.env`, else `~/.kimi-code/credentials/kimi-code.json` | 5-hour, weekly and monthly pools, request counts, Code's share of the month |

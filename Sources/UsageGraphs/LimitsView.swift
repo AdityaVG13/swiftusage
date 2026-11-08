@@ -65,8 +65,6 @@ struct LimitsView: View {
         switch provider {
         // Muse Code's limits are per-minute rates on Meta's API, with nothing to read them from.
         case .muse: return "Muse Code doesn't report plan limits."
-        // Droid's plan is Factory credits, and nothing in its local files says how many are left.
-        case .droid: return "Droid's Factory credits aren't available on this Mac."
         case .pi: return "Pi isn't signed in to a Claude, ChatGPT or Grok subscription."
         case .unattributed: return "Unattributed usage has no associated plan limits."
         default: return "\(provider.name) isn't signed in on this Mac."

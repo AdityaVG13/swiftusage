@@ -1,4 +1,5 @@
 import CommonCrypto
+import CryptoKit
 import Foundation
 import SQLite3
 import Synchronization
@@ -432,6 +433,99 @@ struct LimitsTests {
         try "windsurf_api_key = \"default-key\"\n".write(to: fallback.appendingPathComponent("credentials.toml"), atomically: true, encoding: .utf8)
         #expect(DevinLimits.credentials(home: home, configured: configured).map(\.key) == ["xdg-key", "default-key"])
         #expect(DevinLimits.credentials(home: home, configured: []).map(\.key) == ["default-key"])
+    }
+
+    // MARK: Factory Droid
+
+    /// A login as Droid seals it: base64 nonce, tag and ciphertext, joined by colons.
+    static func sealed(_ json: String, key: Data, nonce: Data) throws -> String {
+        let box = try AES.GCM.seal(Data(json.utf8), using: SymmetricKey(data: key), nonce: try AES.GCM.Nonce(data: nonce))
+        return [nonce, Data(box.tag), box.ciphertext].map { $0.base64EncodedString() }.joined(separator: ":")
+    }
+
+    static func token(_ claims: String) -> String {
+        let payload = Data(claims.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return "header." + payload + ".signature"
+    }
+
+    @Test func droidReportsItsThreeWindows() {
+        let body = object("""
+            {"limits":{"standard":{"fiveHour":{"usedPercent":16,"windowEnd":"2026-11-08T18:50:22.161Z"},
+                                    "weekly":{"usedPercent":5,"windowEnd":"2026-11-15T04:30:41Z"},
+                                    "monthly":{"usedPercent":16,"windowEnd":"2026-11-25T12:25:37Z"}},
+                      "core":{"fiveHour":{"usedPercent":99,"windowEnd":"2026-11-08T18:50:22Z"}}},
+             "extraUsageBalanceCents":1500,"hasActiveSubscription":true}
+            """)
+        let limits = DroidLimits.limits(body, id: "droid:a@b.c", account: "a@b.c", plan: "Max")
+        // The `core` windows are fallbacks without a plan limit, not meters.
+        #expect(limits.meters.map(\.id) == ["5-hour", "weekly", "monthly"])
+        #expect(limits.meters.map(\.label) == ["5-hour", "Weekly", "This month"])
+        #expect(limits.meters.map(\.used) == [16, 5, 16])
+        #expect(limits.meters[0].period == TimeInterval(5 * 3600))
+        #expect(limits.meters[1].period == TimeInterval(7 * 86_400))
+        #expect(limits.meters[0].resetsAt == Date(timeIntervalSince1970: Timestamp.parse("2026-11-08T18:50:22.161Z")!))
+        #expect(limits.notes == [LimitNote(id: "extra-usage", label: "Extra usage", value: "$15.00")])
+        #expect(limits.problem == nil)
+    }
+
+    @Test func droidSaysWhenNoPlanIsOn() {
+        let off = DroidLimits.limits(["hasActiveSubscription": false], id: "droid:x", account: nil, plan: nil)
+        #expect(off.problem == "No Factory plan is on this account.")
+        #expect(off.meters.isEmpty)
+        // An answer with neither windows nor a plan is unexpected, not empty on purpose.
+        let empty = DroidLimits.limits([:], id: "d", account: nil, plan: nil)
+        #expect(empty.problem == "Factory's usage API sent something unexpected.")
+    }
+
+    @Test func droidOpensItsSealedLogin() throws {
+        let key = Data((0..<32).map { UInt8($0) })
+        let nonce = Data((40..<52).map { UInt8($0) })
+        let json = #"{"access_token":"\#(Self.token(#"{"email":"a@b.c"}"#))","whoami":{"inferenceRegion":"eu"}}"#
+        let sealed = try Self.sealed(json, key: key, nonce: nonce)
+        let opened = try #require(DroidLimits.open(sealed, key: key))
+        #expect(opened["access_token"] as? String == Self.token(#"{"email":"a@b.c"}"#))
+        #expect((opened["whoami"] as? [String: Any])?["inferenceRegion"] as? String == "eu")
+        // A key that isn't the one it was sealed with, and text that isn't sealed at all, open nothing.
+        #expect(DroidLimits.open(sealed, key: Data(repeating: 7, count: 32)) == nil)
+        #expect(DroidLimits.open("not-sealed", key: key) == nil)
+    }
+
+    @Test func droidReadsItsPlainFileStoreAndPlan() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("usagegraphs-droid-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let root = home.appendingPathComponent(".factory")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        #expect(DroidLimits.credentials(root: root).login == nil)
+
+        let key = Data((0..<32).map { UInt8($0) })
+        let token = Self.token(#"{"email":"a@b.c","exp":4102444800}"#)
+        try Self.sealed(#"{"access_token":"\#(token)","whoami":{"inferenceRegion":"eu"}}"#, key: key, nonce: Data((40..<52).map { UInt8($0) }))
+            .write(to: root.appendingPathComponent("auth.v2.file"), atomically: true, encoding: .utf8)
+        try key.base64EncodedString().write(to: root.appendingPathComponent("auth.v2.key"), atomically: true, encoding: .utf8)
+
+        let login = try #require(DroidLimits.credentials(root: root).login)
+        #expect(login.token == token)
+        #expect(login.account == "a@b.c")
+        #expect(login.id == "droid:a@b.c")
+        #expect(login.base.absoluteString.contains("eu"))
+        #expect(DroidLimits.plan(root: root) == nil)
+
+        // The organization's managed settings name the tier, in the CLI's lower case.
+        try #"{"factoryTier":"max"}"#.write(to: root.appendingPathComponent("org-managed-settings.cache.json"),
+                                            atomically: true, encoding: .utf8)
+        #expect(DroidLimits.plan(root: root) == "Max")
+    }
+
+    @Test func droidSaysWhenItsLoginExpired() async {
+        let login = DroidLimits.Login(token: Self.token(#"{"email":"a@b.c","exp":1000}"#),
+                                      base: URL(string: "https://api.factory.ai")!, account: "a@b.c", id: "droid:a@b.c")
+        let account = await DroidLimits.limits(login, plan: "Max")
+        #expect(account.problem == "Login expired. Run `droid` to sign in again.")
+        #expect(account.account == "a@b.c")
+        #expect(account.meters.isEmpty)
     }
 
     @Test func grokReadsItsWeeklyPool() {
